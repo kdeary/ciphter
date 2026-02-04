@@ -156,7 +156,7 @@ extern unsigned char *binary_to_bytes(const char *bin, int *out_len) {
 // Assumes 3 digits per byte (e.g. 101 => 65 'A')
 extern unsigned char *octal_to_bytes(const char *oct, int *out_len) {
     int len = strlen(oct);
-    unsigned char *bytes = malloc(len / 3 + 1);
+    unsigned char *bytes = malloc(len + 1);
     if (!bytes) return NULL;
 
     int byte_index = 0;
@@ -167,15 +167,31 @@ extern unsigned char *octal_to_bytes(const char *oct, int *out_len) {
         if (oct[i] >= '0' && oct[i] <= '7') {
             current_val = (current_val * 8) + (oct[i] - '0');
             digit_count++;
+            
+            // If we hit 3 digits, we MUST flush because max octal byte is 3 digits (377)
             if (digit_count == 3) {
-                // Check if valid byte (0-255)
-                if (current_val <= 255) {
+                 if (current_val <= 255) {
                     bytes[byte_index++] = (unsigned char)current_val;
-                }
-                digit_count = 0;
-                current_val = 0;
+                 }
+                 current_val = 0;
+                 digit_count = 0;
             }
+        } else {
+             // Delimiter. If we have leftover digits, flush them.
+             if (digit_count > 0) {
+                 if (current_val <= 255) {
+                    bytes[byte_index++] = (unsigned char)current_val;
+                 }
+                 current_val = 0;
+                 digit_count = 0;
+             }
         }
+    }
+    // Flush trailing
+    if (digit_count > 0) {
+         if (current_val <= 255) {
+            bytes[byte_index++] = (unsigned char)current_val;
+         }
     }
 
     *out_len = byte_index;

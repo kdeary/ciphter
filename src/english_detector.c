@@ -188,21 +188,50 @@ float score_base64_like(const char *text, size_t len) {
     return 1.0f;
 }
 
-float score_english_combined(const char *text, size_t len) {
+static float score_printable(const char *text, size_t len) {
+    if (len == 0) return 0.0f;
+    int printable = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)text[i];
+        if (isprint(c) || c == '\n' || c == '\r' || c == '\t') {
+            printable++;
+        }
+    }
+    return (float)printable / len;
+}
+
+float score_english_detailed(const char *text, size_t len) {
     float s_bigram = score_english_bigram(text, len);
     float s_casing = score_english_casing(text, len);
     float s_freq = score_letter_frequency(text, len);
-    
-    // If bigram score is 0 (looks random), kill the whole score.
-    // This effectively punishes bad text "more" as requested.
-    if (s_bigram < 0.1f) {
-        // Fallback: If it's not English, check if it's perfectly valid Base64 structure.
-        // If so, give it a small boost so it survives in the heap over pure garbage.
-        if (score_base64_like(text, len) > 0.9f) {
-            return 0.25f; // "It's structure, but not English"
-        }
-        return 0.0f;
-    }
+    float s_printable = score_printable(text, len);
 
     return (s_freq * 0.3f) + (s_bigram * 0.5f) + (s_casing * 0.2f);
+}
+
+// New main fitness scoring for solvers - purely printable (with penalty for non-printable)
+float score_combined(const char *text, size_t len) {
+    if (len == 0) return 0.0f;
+    
+    int non_printable = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)text[i];
+        // Check for printable (including standard whitespace)
+        if (!isprint(c) && c != '\n' && c != '\r' && c != '\t') {
+            non_printable++;
+        }
+    }
+
+    // User request: "0 non-printable = 100%, 1 = 50%, 2 = 25%..."
+    // Formula: (1/2)^N
+    if (non_printable == 0) return 1.0f;
+    
+    // Optimization: If too many non-printables, it's effectively 0
+    if (non_printable > 10) return 0.0001f;
+
+    float score = 1.0f;
+    for (int i = 0; i < non_printable; i++) {
+        score *= 0.5f;
+    }
+    return score;
 }

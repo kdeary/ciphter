@@ -26,12 +26,10 @@ solver_fn(HEX) {
 	result.outputs = malloc(sizeof(solver_output_t));
 	result.len = 1;
 
-	result.outputs[0].data = sdsnewlen(data, len);
-	result.outputs[0].method = sdsnew("HEX");
-	result.outputs[0].fitness = score_english_combined(result.outputs[0].data, len);
-	if ((float)len / sdslen(input) < 0.2f) {
-		result.outputs[0].fitness *= 0.5f;
-	}
+    result.outputs[0].data = sdsnewlen(data, len);
+    result.outputs[0].method = sdsnew("HEX");
+    result.outputs[0].fitness = score_combined(result.outputs[0].data, len);
+    // Removed length penalty
 
 	return result;
 }
@@ -58,7 +56,7 @@ solver_fn(BASE64) {
 
 	result.outputs[0].data = sdsnewlen(decoded, out_len);
 	result.outputs[0].method = sdsnew("BASE64");
-	result.outputs[0].fitness = score_english_combined(result.outputs[0].data, out_len);
+	result.outputs[0].fitness = score_combined(result.outputs[0].data, out_len);
 
 	free(decoded);
 	return result;
@@ -111,7 +109,7 @@ solver_fn(AFFINE) {
 	int candidates = 0;
 
 	for (int a = 1; a < ALPHABET_SIZE; a++) {
-		if (!is_coprime(a, ALPHABET_SIZE)) continue;
+		// if (!is_coprime(a, ALPHABET_SIZE)) continue;
 
 		for (int b = 0; b < ALPHABET_SIZE; b++) {
 			sds plain = affine_decrypt(input, a, b);
@@ -168,10 +166,8 @@ solver_fn(BINARY) {
 
     result.outputs[0].data = sdsnewlen(data, len);
     result.outputs[0].method = sdsnew("BINARY");
-    result.outputs[0].fitness = score_english_combined(result.outputs[0].data, len);
-    if ((float)len / sdslen(input) < 0.02f) {
-        result.outputs[0].fitness *= 0.5f;
-    }
+    result.outputs[0].fitness = score_combined(result.outputs[0].data, len);
+    // Removed length penalty
 
     free(data);
     return result;
@@ -197,10 +193,8 @@ solver_fn(OCTAL) {
 
     result.outputs[0].data = sdsnewlen(data, len);
     result.outputs[0].method = sdsnew("OCTAL");
-    result.outputs[0].fitness = score_english_combined(result.outputs[0].data, len);
-    if ((float)len / sdslen(input) < 0.1f) {
-        result.outputs[0].fitness *= 0.5f;
-    }
+    result.outputs[0].fitness = score_combined(result.outputs[0].data, len);
+    // Removed length penalty
 
     free(data);
     return result;

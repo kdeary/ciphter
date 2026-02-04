@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include "analyzers/analysis_registry.h"
 #include "solvers/solver_registry.h"
+#include "english_detector.h"
 #include "../lib/minheap/heap.h"
 
 #define PROBABILITY_THRESHOLD 0.01f
@@ -19,7 +20,9 @@ static char args_doc[] = "";
 static struct argp_option options[] = {
 	{ "task", 't', "TYPE", 0, "Task type: A for analyze, S for solve" },
 	{ "input", 'i', "STRING", 0, "Input ciphertext or filename" },
-	{ "probability", 'p', "INT", 0, "Probability/Fitness threshold (0-100)" },
+	{ "probability", 'p', "INT", 0, "Probability/Fitness (Printable) threshold (0-100)" },
+    { "english", 'E', "INT", 0, "English quality threshold (0-100) for output filtering" },
+    { "monitor", 'm', "STRING", 0, "Monitor specific path substring (debug logging)" },
 	{ "algorithms", 'a', "STRING", 0, "Algorithms to use [process only]" },
 	{ "depth", 'd', "INT", 0, "Depth of algorithm combinations [process only]" },
 	{ "keys", 'k', "STRING", 0, "Keys or key file [process only]" },
@@ -29,59 +32,71 @@ static struct argp_option options[] = {
 
 // Struct to hold parsed options
 struct arguments {
-	char *subcommand;
-	char *input;
-	char *algorithms;
-	int depth;
-	char *keys;
+    char *subcommand;
+    char *input;
+    char *algorithms;
+    int depth;
+    char *keys;
     char *crib;
-	int probability_threshold;
+    int probability_threshold;
+    int english_threshold; // -1 if disabled
+    char *monitor_path; // NULL if disabled
 };
 
 // Parser function
 static error_t parse_opt(int key, char *arg, struct argp_state *state) {
-	struct arguments *arguments = state->input;
+    struct arguments *arguments = state->input;
 
-	switch (key) {
-	case 't':
-		if (strcasecmp(arg, "A") == 0)
-			arguments->subcommand = "analyze";
-		else if (strcasecmp(arg, "S") == 0)
-			arguments->subcommand = "solve";
-		else
-			argp_error(state, "Unknown task type: %s", arg);
-		break;
-	case 'i':
-		arguments->input = arg;
-		break;
-	case 'p':
-		arguments->probability_threshold = atoi(arg);
-		if (arguments->probability_threshold < 0 || arguments->probability_threshold > 100) {
-			argp_error(state, "Probability threshold must be between 0 and 100.");
-		}
-		break;
-	case 'a':
-		arguments->algorithms = arg;
-		break;
-	case 'd':
-		arguments->depth = atoi(arg);
-		break;
-	case 'k':
-		arguments->keys = arg;
-		break;
+    switch (key) {
+    case 't':
+        if (strcasecmp(arg, "A") == 0)
+            arguments->subcommand = "analyze";
+        else if (strcasecmp(arg, "S") == 0)
+            arguments->subcommand = "solve";
+        else
+            argp_error(state, "Unknown task type: %s", arg);
+        break;
+    case 'i':
+        arguments->input = arg;
+        break;
+    case 'p':
+        arguments->probability_threshold = atoi(arg);
+        if (arguments->probability_threshold < 0 || arguments->probability_threshold > 100) {
+            argp_error(state, "Probability threshold must be between 0 and 100.");
+        }
+        break;
+    case 'E':
+        arguments->english_threshold = atoi(arg);
+        if (arguments->english_threshold < 0 || arguments->english_threshold > 100) {
+            argp_error(state, "English threshold must be between 0 and 100.");
+        }
+        break;
+    case 'm':
+        arguments->monitor_path = arg;
+        break;
+    case 'a':
+        arguments->algorithms = arg;
+        break;
+    case 'd':
+        arguments->depth = atoi(arg);
+        break;
+    case 'k':
+        arguments->keys = arg;
+        break;
     case 'c':
         arguments->crib = arg;
         break;
-	case ARGP_KEY_ARG:
-		argp_usage(state);
-		break;
-	case ARGP_KEY_END:
-		break;
-	default:
-		return ARGP_ERR_UNKNOWN;
-	}
-	return 0;
+    case ARGP_KEY_ARG:
+        argp_usage(state);
+        break;
+    case ARGP_KEY_END:
+        break;
+    default:
+        return ARGP_ERR_UNKNOWN;
+    }
+    return 0;
 }
+
 
 void analyze(sds input, float probability_threshold) {
 	printf("[INFO] Running analysis on input: \"%s\"\n", input);
@@ -121,12 +136,20 @@ void free_output(solver_output_t *output) {
 int output_compare_fn(void *output1, void *output2) {
 	solver_output_t *o1 = (solver_output_t *)output1;
 	solver_output_t *o2 = (solver_output_t *)output2;
-	if (o1->fitness > o2->fitness) return -1; // o1 is "smaller" (top of heap)
-	if (o1->fitness < o2->fitness) return 1;
+    
+    // Normalize by depth to prevent Depth-First Search behavior from dominating
+    // We use a gentle penalty so deep, high-quality paths still win, 
+    // but deep junk paths don't beat shallow paths.
+    // Using sqrt(depth) as divisor dampens the sum effect.
+    float score1 = o1->cumulative_fitness / (o1->depth + 1.0f);
+    float score2 = o2->cumulative_fitness / (o2->depth + 1.0f);
+
+	if (score1 > score2) return -1; // o1 is "smaller" (top of heap/best)
+	if (score1 < score2) return 1;
 	return 0;
 }
 
-void solve(sds input, float fitness_threshold, const char *algorithms, int depth, keychain_t *keychain, const char *crib) {
+void solve(sds input, float fitness_threshold, const char *algorithms, int depth, keychain_t *keychain, const char *crib, int english_threshold, const char *monitor_path) {
 	printf("[INFO] Running solving on input: \"%s\"\n", input);
 	int found = 0;
 
@@ -136,6 +159,7 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
 
 	solver_output_t input_res = {
 		.fitness = 1,
+        .cumulative_fitness = 1, // Start with base fitness
 		.method = sdsnew("CIPHERTEXT"),
 		.data = sdsdup(input),
 		.depth = 0,
@@ -159,15 +183,41 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
 
 		// Prioritize crib matches
 		if (crib && strstr(current->data, crib) != NULL) {
-			current->fitness = -1.0f;
+            current->fitness = -1.0f;
 			printf("[CRIB FOUND] \"%s\" - Method: \"%s\"\n", current->data, current->method);
 			free_output(current);
 			continue; // Stop recursion
 		}
 
+        // Monitor logs - Check BEFORE filtering
+        if (monitor_path && strstr(current->method, monitor_path) != NULL) {
+             printf("[MONITOR] [%d]\t [Agg:%.2f] [Fit:%.2f] \"%s\" - Method: \"%s\"\n", 
+                current->depth, 
+                current->cumulative_fitness,
+                current->fitness,
+                current->data, 
+                current->method);
+        }
+
 		// Only print if no crib was provided and fitness is high enough
+        // AND english threshold met (if enabled)
 		if (!crib && current->fitness > fitness_threshold) {
-			printf("[%d][%.0f%%]\t [OUTPUT] \"%s\" - Method: \"%s\"\n", current->depth, current->fitness * 100, current->data, current->method);
+             int show = 1;
+             if (english_threshold >= 0) {
+                 float eng_score = score_english_detailed(current->data, sdslen(current->data));
+                 if (eng_score * 100 < english_threshold) {
+                     show = 0;
+                 }
+             }
+             
+             if (show) {
+			    printf("[%d][%.0f%%][Agg:%.2f]\t [OUTPUT] \"%s\" - Method: \"%s\"\n", 
+                    current->depth, 
+                    current->fitness * 100, 
+                    current->cumulative_fitness,
+                    current->data, 
+                    current->method);
+             }
 		}
 
 		if (current->fitness < MINIMUM_WORKING_FITNESS || current->depth >= depth) {
@@ -191,6 +241,14 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
 
 				solver_output_t *saved_output = malloc(sizeof(solver_output_t));
 				saved_output->fitness = result.outputs[j].fitness;
+                saved_output->cumulative_fitness = current->cumulative_fitness + result.outputs[j].fitness;
+				
+				// Prioritize crib matches immediately
+				if (crib && strstr(result.outputs[j].data, crib) != NULL) {
+					saved_output->fitness = 10000.0f; // Max priority
+                    saved_output->cumulative_fitness += 10000.0f; // Also boost accumulator
+				}
+
 				saved_output->method = sdscatprintf(sdsempty(), "%s -> %s", current->method, result.outputs[j].method);
 				saved_output->data = sdsdup(result.outputs[j].data);
 				saved_output->depth = current->depth + 1;
@@ -204,10 +262,10 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
 		free_output(current);
 	}
 
-	heap_destroy(&path_heap);
-	if (!found) {
-		printf("[INFO] No high-probability solving results found.\n");
-	}
+heap_destroy(&path_heap);
+if (!found) {
+    printf("[INFO] No high-probability solving results found.\n");
+}
 }
 
 int main(int argc, char *argv[]) {
@@ -217,7 +275,8 @@ int main(int argc, char *argv[]) {
 		.algorithms = "common",
 		.depth = 1,
 		.keys = "",
-		.probability_threshold = (int)(PROBABILITY_THRESHOLD * 100)
+		.probability_threshold = (int)(PROBABILITY_THRESHOLD * 100),
+        .english_threshold = -1
 	};
 
 	struct argp argp = { options, parse_opt, args_doc, doc };
@@ -258,7 +317,7 @@ int main(int argc, char *argv[]) {
 			.keys = tokens
 		};
 		
-		solve(sdsnew(args.input), args.probability_threshold / 100.0f, args.algorithms, args.depth, &keychain, args.crib);
+		solve(sdsnew(args.input), args.probability_threshold / 100.0f, args.algorithms, args.depth, &keychain, args.crib, args.english_threshold, args.monitor_path);
 	}
 
 	return 0;

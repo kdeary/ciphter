@@ -28,7 +28,7 @@ analysis_fn(HEX) {
 
 analysis_fn(ENGLISH) {
 	int len = sdslen(input);
-	float prob = score_english_combined(input, len);
+	float prob = score_english_detailed(input, len);
 	const char *msg = "Possible English text";
 	return (analysis_result_t){ .probability = prob, .message = msg };
 }

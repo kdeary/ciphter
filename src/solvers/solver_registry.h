@@ -10,6 +10,7 @@ typedef struct {
 
 typedef struct {
 	float fitness;
+    float cumulative_fitness;
 	int depth;
 	sds method;
 	sds data;
@@ -24,7 +25,6 @@ typedef struct {
 typedef struct {
 	const char *label;
 
-	// 1 = popular, 0.75 = common, 0.5 = uncommon, 0.25 = rare, 0 = special
 	// 1 = popular, 0.75 = common, 0.5 = uncommon, 0.25 = rare, 0 = special
 	float popularity;
 

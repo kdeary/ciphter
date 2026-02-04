@@ -48,5 +48,9 @@ int main() {
     const char *short_text = "ashley LEE";
     check("Short Text", short_text, 0.7f, 1.0f);
 
+    // Test user's solution
+    const char *solution = "C3T-CHEF-6767";
+    check("Solution String", solution, 0.5f, 1.0f);
+
     return 0;
 }
