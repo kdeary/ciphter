@@ -166,6 +166,28 @@ static float score_letter_frequency(const char *text, size_t len) {
     return 50.0f / (50.0f + chi_sq);
 }
 
+// Check if string looks like valid Base64 (structure only)
+float score_base64_like(const char *text, size_t len) {
+    if (len % 4 != 0 && len > 0) return 0.0f; // Base64 usually padded to 4 chars
+    if (len == 0) return 0.0f;
+    
+    int padding = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)text[i];
+        if (isalnum(c) || c == '+' || c == '/') {
+            if (padding > 0) return 0.0f; // Padding must be at the end
+        } else if (c == '=') {
+            padding++;
+        } else {
+            return 0.0f; // Invalid char
+        }
+    }
+    
+    if (padding > 2) return 0.0f; // Max 2 padding chars
+    
+    return 1.0f;
+}
+
 float score_english_combined(const char *text, size_t len) {
     float s_bigram = score_english_bigram(text, len);
     float s_casing = score_english_casing(text, len);
@@ -174,6 +196,11 @@ float score_english_combined(const char *text, size_t len) {
     // If bigram score is 0 (looks random), kill the whole score.
     // This effectively punishes bad text "more" as requested.
     if (s_bigram < 0.1f) {
+        // Fallback: If it's not English, check if it's perfectly valid Base64 structure.
+        // If so, give it a small boost so it survives in the heap over pure garbage.
+        if (score_base64_like(text, len) > 0.9f) {
+            return 0.25f; // "It's structure, but not English"
+        }
         return 0.0f;
     }
 

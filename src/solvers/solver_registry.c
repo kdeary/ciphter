@@ -7,7 +7,7 @@
 #include "../english_detector.h"
 
 #define solver_fn(fn_label) static solver_result_t solve_ ## fn_label (sds input, keychain_t *keychain)
-#define SOLVER(fn_label) { .label = #fn_label, .popularity = 0.5, .fn = solve_ ## fn_label }
+#define SOLVER(fn_label, p_score, consecutive) { .label = #fn_label, .popularity = p_score, .prevent_consecutive = consecutive, .fn = solve_ ## fn_label }
 #define DEBUG 1
 #define ALPHABET_SIZE 26
 
@@ -28,28 +28,37 @@ solver_fn(HEX) {
 
 	result.outputs[0].data = sdsnewlen(data, len);
 	result.outputs[0].method = sdsnew("HEX");
-	result.outputs[0].fitness = score_english_combined(result.outputs[0].data, sdslen(result.outputs[0].data)) + 0.01f;
+	result.outputs[0].fitness = score_english_combined(result.outputs[0].data, len);
+	if ((float)len / sdslen(input) < 0.2f) {
+		result.outputs[0].fitness *= 0.5f;
+	}
 
 	return result;
 }
 
 solver_fn(BASE64) {
-	solver_result_t result = {0};
-	size_t decoded_len;
-	unsigned char *decoded = base64_decode(input, sdslen(input), &decoded_len);
-	if (!decoded) {
-		free(result.outputs);
-		result.outputs = NULL;
-		result.len = 0;
+	size_t out_len;
+	unsigned char *decoded = base64_decode(input, sdslen(input), &out_len);
+
+	solver_result_t result = {
+		.len = 0,
+		.outputs = NULL,
+	};
+
+	if (!decoded) return result;
+
+	// Ignore empty results
+	if (out_len == 0) {
+		free(decoded);
 		return result;
 	}
 
 	result.outputs = malloc(sizeof(solver_output_t));
 	result.len = 1;
 
-	result.outputs[0].data = sdsnewlen(decoded, decoded_len);
+	result.outputs[0].data = sdsnewlen(decoded, out_len);
 	result.outputs[0].method = sdsnew("BASE64");
-	result.outputs[0].fitness = score_english_combined(result.outputs[0].data, sdslen(result.outputs[0].data)) + 0.01f;
+	result.outputs[0].fitness = score_english_combined(result.outputs[0].data, out_len);
 
 	free(decoded);
 	return result;
@@ -112,10 +121,18 @@ solver_fn(AFFINE) {
 			float fitness = score_english_combined(decrypted, sdslen(decrypted));
 			free(plain);
 
-			if (fitness < 0.5) {
-				sdsfree(decrypted);
-				continue;
-			}
+			// Heuristic: Penalize complex keys.
+            // Start with base fitness, then subtract a tiny amount based on 'a' and 'b'.
+            // This ensures "a=1 b=0" (simpler) > "a=3 b=10" (complex) given equal valid English output.
+			if (fitness > 0) {
+                // User requested priority: a=1 (all b), then a=higher.
+                // Since max b=25, weighting a by 30 ensures a dominates b.
+				float penalty = ((float)a * 30.0f + (float)b) / 2000.0f; 
+				fitness = fitness * 0.75f - penalty;
+				if (fitness < 0) fitness = 0.001f; // Don't allow negative or zero if it was valid
+			} else {
+                fitness = 0.0f;
+            }
 
 			result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
 			result.outputs[candidates].data = decrypted;
@@ -129,63 +146,79 @@ solver_fn(AFFINE) {
 	return result;
 }
 
-char *caesar_decrypt(sds text, int shift) {
-	size_t len = sdslen(text);
-	sds out = sdsnewlen("", len);
-	if (!out) return NULL;
 
-	for (size_t i = 0; i < len; i++) {
-		char c = text[i];
-		if (isalpha(c)) {
-			char base = isupper(c) ? 'A' : 'a';
-			out[i] = (char)(((c - base - shift + ALPHABET_SIZE) % ALPHABET_SIZE) + base);
-		} else {
-			out[i] = c; // Leave non-alphabet characters untouched
-		}
-	}
 
-	out[len] = '\0';
-	return out;
+solver_fn(BINARY) {
+    int len = 0;
+    unsigned char *data = binary_to_bytes(input, &len);
+    
+    solver_result_t result = {
+        .len = 0,
+        .outputs = NULL,
+    };
+
+    if (!data) return result;
+    if (len == 0) {
+        free(data);
+        return result;
+    }
+
+    result.outputs = malloc(sizeof(solver_output_t));
+    result.len = 1;
+
+    result.outputs[0].data = sdsnewlen(data, len);
+    result.outputs[0].method = sdsnew("BINARY");
+    result.outputs[0].fitness = score_english_combined(result.outputs[0].data, len);
+    if ((float)len / sdslen(input) < 0.02f) {
+        result.outputs[0].fitness *= 0.5f;
+    }
+
+    free(data);
+    return result;
 }
 
-solver_fn(CAESAR) {
-	solver_result_t result = {
-		.len = 0,
-		.outputs = NULL,
-	};
+solver_fn(OCTAL) {
+    int len = 0;
+    unsigned char *data = octal_to_bytes(input, &len);
+    
+    solver_result_t result = {
+        .len = 0,
+        .outputs = NULL,
+    };
 
-	int candidates = 0;
+    if (!data) return result;
+    if (len == 0) {
+        free(data);
+        return result;
+    }
 
-	for (int shift = 1; shift < ALPHABET_SIZE; shift++) {
-		sds plain = caesar_decrypt(input, shift);
-		if (!plain) continue;
+    result.outputs = malloc(sizeof(solver_output_t));
+    result.len = 1;
 
-		sds decrypted = sdsnew(plain);
-		float fitness = score_english_combined(decrypted, sdslen(decrypted));
-		free(plain);
+    result.outputs[0].data = sdsnewlen(data, len);
+    result.outputs[0].method = sdsnew("OCTAL");
+    result.outputs[0].fitness = score_english_combined(result.outputs[0].data, len);
+    if ((float)len / sdslen(input) < 0.1f) {
+        result.outputs[0].fitness *= 0.5f;
+    }
 
-		if (fitness < 0.5) {
-			sdsfree(decrypted);
-			continue;
-		}
-
-		result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
-		result.outputs[candidates].data = decrypted;
-		result.outputs[candidates].method = sdscatprintf(sdsempty(), "CAESAR shift=%d", shift);
-		result.outputs[candidates].fitness = fitness;
-		candidates++;
-	}
-
-	result.len = candidates;
-	return result;
+    free(data);
+    return result;
 }
 
 // Ordered by popularity/commonness
 solver_t solvers[] = {
-	SOLVER(HEX),
-	SOLVER(BASE64),
-	SOLVER(AFFINE),
-	SOLVER(CAESAR),
+	SOLVER(HEX, 1, 0),
+	SOLVER(BASE64, 1, 0),
+    SOLVER(BINARY, 0.75, 0),
+    SOLVER(OCTAL, 0.75, 0),
+	SOLVER(AFFINE, 0.5, 1),
 };
 
 size_t solvers_count = sizeof(solvers) / sizeof(solver_t);
+
+solver_t *get_solvers(const char *algorithms, size_t *count) {
+    // TODO: Implement filtering based on 'algorithms' string
+    *count = solvers_count;
+    return solvers;
+}

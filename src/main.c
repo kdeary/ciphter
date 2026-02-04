@@ -23,6 +23,7 @@ static struct argp_option options[] = {
 	{ "algorithms", 'a', "STRING", 0, "Algorithms to use [process only]" },
 	{ "depth", 'd', "INT", 0, "Depth of algorithm combinations [process only]" },
 	{ "keys", 'k', "STRING", 0, "Keys or key file [process only]" },
+    { "crib", 'c', "STRING", 0, "Known string to search for (filters output)" },
 	{ 0 }
 };
 
@@ -33,6 +34,7 @@ struct arguments {
 	char *algorithms;
 	int depth;
 	char *keys;
+    char *crib;
 	int probability_threshold;
 };
 
@@ -67,6 +69,9 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
 	case 'k':
 		arguments->keys = arg;
 		break;
+    case 'c':
+        arguments->crib = arg;
+        break;
 	case ARGP_KEY_ARG:
 		argp_usage(state);
 		break;
@@ -121,15 +126,20 @@ int output_compare_fn(void *output1, void *output2) {
 	return 0;
 }
 
-void solve(sds input, float fitness_threshold, const char *algorithms, int depth, keychain_t *keychain) {
+void solve(sds input, float fitness_threshold, const char *algorithms, int depth, keychain_t *keychain, const char *crib) {
 	printf("[INFO] Running solving on input: \"%s\"\n", input);
 	int found = 0;
+
+	// Parse algorithm string or use default
+	size_t solvers_count = 0;
+	solver_t *solvers = get_solvers(algorithms, &solvers_count);
 
 	solver_output_t input_res = {
 		.fitness = 1,
 		.method = sdsnew("CIPHERTEXT"),
 		.data = sdsdup(input),
-		.depth = 0
+		.depth = 0,
+		.last_solver = NULL
 	};
 
 	heap path_heap = {0};
@@ -147,7 +157,16 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
 			break;
 		}
 
-		if(current->fitness > fitness_threshold) {
+		// Prioritize crib matches
+		if (crib && strstr(current->data, crib) != NULL) {
+			current->fitness = -1.0f;
+			printf("[CRIB FOUND] \"%s\" - Method: \"%s\"\n", current->data, current->method);
+			free_output(current);
+			continue; // Stop recursion
+		}
+
+		// Only print if no crib was provided and fitness is high enough
+		if (!crib && current->fitness > fitness_threshold) {
 			printf("[%d][%.0f%%]\t [OUTPUT] \"%s\" - Method: \"%s\"\n", current->depth, current->fitness * 100, current->data, current->method);
 		}
 
@@ -158,6 +177,11 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
 		
 		for (size_t i = 0; i < solvers_count; ++i) {
 			solver_t solver = solvers[i];
+
+			if (current->last_solver && strcmp(current->last_solver, solver.label) == 0 && solver.prevent_consecutive) {
+				continue;
+			}
+
 			solver_result_t result = solver.fn(current->data, keychain);
 			for (size_t j = 0; j < result.len; ++j) {
 				// printf("[%.0f%%]\t [%s] %s\n", result.outputs[j].fitness * 100, solver.label, result.outputs[j].data);
@@ -170,6 +194,7 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
 				saved_output->method = sdscatprintf(sdsempty(), "%s -> %s", current->method, result.outputs[j].method);
 				saved_output->data = sdsdup(result.outputs[j].data);
 				saved_output->depth = current->depth + 1;
+				saved_output->last_solver = solver.label;
 
 				heap_insert(&path_heap, saved_output, saved_output);
 			}
@@ -233,7 +258,7 @@ int main(int argc, char *argv[]) {
 			.keys = tokens
 		};
 		
-		solve(sdsnew(args.input), args.probability_threshold / 100.0f, args.algorithms, args.depth, &keychain);
+		solve(sdsnew(args.input), args.probability_threshold / 100.0f, args.algorithms, args.depth, &keychain, args.crib);
 	}
 
 	return 0;

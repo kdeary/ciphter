@@ -90,11 +90,15 @@ extern float fitness_heuristic(sds data) {
 		if (isprint(data[i])) score += 1.0f;
 	}
 
-	// Normalize score to a range of 0.0 to 1.0
 	if (len > 0) {
-		return score / len;
+		float ratio = score / len;
+        // Exponential punishment for non-printable characters
+        // 95% printable = 0.66
+        // 90% printable = 0.43
+        // 80% printable = 0.16
+		return (float)pow(ratio, 8.0);
 	} else {
-		return 0.0f; // Avoid division by zero
+		return 0.0f;
 	}
 }
 
@@ -120,6 +124,62 @@ extern unsigned char *hex_to_bytes(const char *hex, int *out_len) {
 
 	*out_len = byte_index;
 	return bytes;
+}
+
+// Convert binary string (0s and 1s, ignoring other chars) to bytes
+extern unsigned char *binary_to_bytes(const char *bin, int *out_len) {
+    int len = strlen(bin);
+    unsigned char *bytes = malloc(len / 8 + 1); // Approximation
+    if (!bytes) return NULL;
+
+    int byte_index = 0;
+    int bit_count = 0;
+    unsigned char current_byte = 0;
+
+    for (int i = 0; bin[i] != '\0'; i++) {
+        if (bin[i] == '0' || bin[i] == '1') {
+            current_byte = (current_byte << 1) | (bin[i] - '0');
+            bit_count++;
+            if (bit_count == 8) {
+                bytes[byte_index++] = current_byte;
+                bit_count = 0;
+                current_byte = 0;
+            }
+        }
+    }
+
+    *out_len = byte_index;
+    return bytes;
+}
+
+// Convert octal string (0-7, ignoring other chars) to bytes
+// Assumes 3 digits per byte (e.g. 101 => 65 'A')
+extern unsigned char *octal_to_bytes(const char *oct, int *out_len) {
+    int len = strlen(oct);
+    unsigned char *bytes = malloc(len / 3 + 1);
+    if (!bytes) return NULL;
+
+    int byte_index = 0;
+    int digit_count = 0;
+    int current_val = 0;
+
+    for (int i = 0; oct[i] != '\0'; i++) {
+        if (oct[i] >= '0' && oct[i] <= '7') {
+            current_val = (current_val * 8) + (oct[i] - '0');
+            digit_count++;
+            if (digit_count == 3) {
+                // Check if valid byte (0-255)
+                if (current_val <= 255) {
+                    bytes[byte_index++] = (unsigned char)current_val;
+                }
+                digit_count = 0;
+                current_val = 0;
+            }
+        }
+    }
+
+    *out_len = byte_index;
+    return bytes;
 }
 
 static void build_decoding_table() {
