@@ -118,7 +118,7 @@ solver_fn(AFFINE) {
 			if (!plain) continue;
 
 			sds decrypted = sdsnew(plain);
-			float fitness = score_english_combined(decrypted, sdslen(decrypted));
+			float fitness = fitness_heuristic(decrypted) * 0.75f;
 			free(plain);
 
 			// Heuristic: Penalize complex keys.
@@ -128,7 +128,7 @@ solver_fn(AFFINE) {
                 // User requested priority: a=1 (all b), then a=higher.
                 // Since max b=25, weighting a by 30 ensures a dominates b.
 				float penalty = ((float)a * 30.0f + (float)b) / 2000.0f; 
-				fitness = fitness * 0.75f - penalty;
+				fitness = (fitness * 0.75f) - (penalty * 0.01f);
 				if (fitness < 0) fitness = 0.001f; // Don't allow negative or zero if it was valid
 			} else {
                 fitness = 0.0f;
