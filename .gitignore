@@ -1,0 +1,4 @@
+.gdbinit
+bin/
+test_detector
+test_detector.exe

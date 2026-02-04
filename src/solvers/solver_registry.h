@@ -10,6 +10,7 @@ typedef struct {
 
 typedef struct {
 	float fitness;
+	int depth;
 	sds method;
 	sds data;
 } solver_output_t;

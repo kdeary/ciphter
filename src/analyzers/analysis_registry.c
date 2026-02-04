@@ -24,16 +24,11 @@ analysis_fn(HEX) {
 	return (analysis_result_t){ .probability = prob, .message = msg };
 }
 
+#include "../english_detector.h"
+
 analysis_fn(ENGLISH) {
 	int len = sdslen(input);
-	size_t alpha_count = 0;
-	for (size_t i = 0; i < len; i++) {
-		if (isalpha((unsigned char)input[i])) {
-			alpha_count++;
-		}
-	}
-
-	float prob = (float)alpha_count / (float)(len);
+	float prob = score_english_combined(input, len);
 	const char *msg = "Possible English text";
 	return (analysis_result_t){ .probability = prob, .message = msg };
 }

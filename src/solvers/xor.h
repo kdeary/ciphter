@@ -1,200 +1,243 @@
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
-#include <ctype.h>
-#include <float.h>
-#include <math.h>
+#include <limits.h>
+#include "../../lib/sds/sds.h"
+#include "../utils.h"
 
-#define MAX_KEYSIZE 40
-#define NUM_KEYSIZE_CANDIDATES 3
+#define MAX_KEYS 1024
+#define MAX_KEY_LENGTH 40
+#define KNOWN_KEY_LENGTH 5  // substitute with actual value or global config
 
-// XOR two bytes and count differing bits
-int hamming_distance(const unsigned char *a, const unsigned char *b, int len) {
-	int dist = 0;
-	for (int i = 0; i < len; i++) {
-		unsigned char val = a[i] ^ b[i];
-		while (val) {
-			dist += val & 1;
-			val >>= 1;
-		}
-	}
-	return dist;
-}
+typedef struct {
+	uint8_t** keys;  // array of key byte arrays
+	int count;
+	int key_length;
+} KeyList;
 
-// Score plaintext for likelihood of being English
-float score_printable(const unsigned char *data, int len) {
-    float score = 0.0;
-    for (int i = 0; i < len; i++) {
-        if (isprint(data[i]))
-            score += 1.0;
-        else
-            score -= 2.0;
-    }
-    return score;
-}
+typedef struct {
+	uint8_t key[MAX_KEY_LENGTH];  // actual key bytes
+	char source_char;             // character used to guess this key
+} KeySource;
 
-// Guess key size based on normalized hamming distance
-void guess_key_sizes(const unsigned char *data, int len, int *out_keysizes) {
-	double scores[MAX_KEYSIZE + 1] = {0};
+typedef struct {
+	KeySource sources[MAX_KEYS];
+	int count;
+} KeyMap;
 
-	for (int keysize = 2; keysize <= MAX_KEYSIZE; keysize++) {
-		int num_blocks = len / keysize;
-		if (num_blocks < 2) continue;
+typedef struct {
+	int key_length;
+	double fitness;
+} Fitness;
 
-		double total = 0;
-		for (int i = 0; i < num_blocks - 1; i++) {
-			const unsigned char *a = data + i * keysize;
-			const unsigned char *b = data + (i + 1) * keysize;
-			int dist = hamming_distance(a, b, keysize);
-			total += (double)dist / keysize;
-		}
-		scores[keysize] = total / (num_blocks - 1);
+int chars_count_at_offset(const sds text, int key_length, int offset) {
+	int counts[256] = {0};  // ASCII frequency table
+	int len = sdslen(text);
+
+	for (int pos = offset; pos < len; pos += key_length) {
+		unsigned char c = (unsigned char)text[pos];
+		counts[c]++;
 	}
 
-	// Get top N lowest scores (most likely key sizes)
-	for (int i = 0; i < NUM_KEYSIZE_CANDIDATES; i++) {
-		double min_score = DBL_MAX;
-		int best_keysize = 0;
-		for (int k = 2; k <= MAX_KEYSIZE; k++) {
-			if (scores[k] < min_score) {
-				min_score = scores[k];
-				best_keysize = k;
+	// Find the maximum frequency
+	int max_count = 0;
+	for (int i = 0; i < 256; ++i) {
+		if (counts[i] > max_count) {
+			max_count = counts[i];
+		}
+	}
+
+	return max_count;
+}
+
+int count_equals(const sds text, int key_length) {
+	int len = sdslen(text);
+	if (key_length >= len) {
+		return 0;
+	}
+
+	int equals_count = 0;
+	for (int offset = 0; offset < key_length; ++offset) {
+		int max_count = chars_count_at_offset(text, key_length, offset);
+		equals_count += max_count - 1;  // Python version had this adjustment
+	}
+
+	return equals_count;
+}
+
+Fitness* calculate_fitnesses(sds text, int* out_count) {
+	double prev = 0;
+	double pprev = 0;
+	int capacity = 10;
+	int count = 0;
+
+	Fitness* fitnesses = malloc(capacity * sizeof(Fitness));
+	if (!fitnesses) {
+		perror("malloc failed");
+		exit(EXIT_FAILURE);
+	}
+
+	for (int key_length = 1; key_length <= MAX_KEY_LENGTH; ++key_length) {
+		int raw_fitness = count_equals(text, key_length);
+		double fitness = (double)raw_fitness / (MAX_KEY_LENGTH + pow(key_length, 1.5));
+
+		if (pprev < prev && prev > fitness) {
+			// Local maximum
+			if (count >= capacity) {
+				capacity *= 2;
+				fitnesses = realloc(fitnesses, capacity * sizeof(Fitness));
+				if (!fitnesses) {
+					perror("realloc failed");
+					exit(EXIT_FAILURE);
+				}
+			}
+			fitnesses[count++] = (Fitness){key_length - 1, prev};
+		}
+
+		pprev = prev;
+		prev = fitness;
+	}
+
+	// Check for last local maximum
+	if (pprev < prev) {
+		if (count >= capacity) {
+			capacity += 1;
+			fitnesses = realloc(fitnesses, capacity * sizeof(Fitness));
+			if (!fitnesses) {
+				perror("realloc failed");
+				exit(EXIT_FAILURE);
 			}
 		}
-		out_keysizes[i] = best_keysize;
-		scores[best_keysize] = DBL_MAX;
+		fitnesses[count++] = (Fitness){MAX_KEY_LENGTH, prev};
 	}
+
+	*out_count = count;
+	return fitnesses;
 }
 
-// Brute-force single-byte XOR
-unsigned char guess_single_byte_xor(const unsigned char *block, int len, double *out_score) {
-	double best_score = -DBL_MAX;
-	unsigned char best_key = 0;
+int get_max_fitnessed_key_length(Fitness* fitnesses, int count) {
+	double max_fitness = 0.0;
+	int max_fitnessed_key_length = 0;
 
-	for (int k = 0; k < 256; k++) {
-		unsigned char *decoded = malloc(len);
-		for (int i = 0; i < len; i++) {
-			decoded[i] = block[i] ^ k;
+	for (int i = 0; i < count; ++i) {
+		if (fitnesses[i].fitness > max_fitness) {
+			max_fitness = fitnesses[i].fitness;
+			max_fitnessed_key_length = fitnesses[i].key_length;
 		}
-		double score = score_english(decoded, len);
-		if (score > best_score) {
-			best_score = score;
-			best_key = k;
-		}
-		free(decoded);
 	}
 
-	*out_score = best_score;
-	return best_key;
+	return max_fitnessed_key_length;
 }
 
-// Break repeating-key XOR
-void break_xor(const unsigned char *data) {
-	int keysizes[NUM_KEYSIZE_CANDIDATES];
-	int len = strlen((const char *)data);
-	guess_key_sizes(data, len, keysizes);
+int guess_key_length(sds text) {
+	int fitness_count = 0;
+	Fitness* fitnesses = calculate_fitnesses(text, &fitness_count);
 
-	for (int i = 0; i < NUM_KEYSIZE_CANDIDATES; i++) {
-		int keysize = keysizes[i];
-		unsigned char *key = malloc(keysize);
-		double total_score = 0;
+	int best_key_length = get_max_fitnessed_key_length(fitnesses, fitness_count);
 
-		for (int j = 0; j < keysize; j++) {
-			int block_len = (len - j + keysize - 1) / keysize;
-			unsigned char *block = malloc(block_len);
-			for (int k = 0; k < block_len; k++) {
-				block[k] = data[j + k * keysize];
-			}
-
-			double block_score;
-			key[j] = guess_single_byte_xor(block, block_len, &block_score);
-			total_score += block_score;
-			free(block);
-		}
-
-		// Decrypt
-		unsigned char *plaintext = malloc(len + 1);
-		for (int j = 0; j < len; j++) {
-			plaintext[j] = data[j] ^ key[j % keysize];
-		}
-		plaintext[len] = '\0';
-
-		printf("\n[*] Key size: %d\n", keysize);
-		printf("[*] Key: ");
-		for (int j = 0; j < keysize; j++) printf("%c", isprint(key[j]) ? key[j] : '.');
-		printf("\n[*] Score: %.2f\n", total_score);
-		printf("[*] Decrypted: %s\n", plaintext);
-
-		free(plaintext);
-		free(key);
-	}
+	free(fitnesses);  // clean up allocated memory
+	return best_key_length;
 }
 
-solver_fn(XOR) {
-	static solve_result_t results[NUM_KEYSIZE_CANDIDATES + 32]; // reserve for bruteforce + keys[]
-	int result_count = 0;
+KeyList all_keys(uint8_t** key_possible_bytes, int key_length, int offset, uint8_t* partial_key) {
+	KeyList result = { .keys = malloc(MAX_KEYS * sizeof(uint8_t*)), .count = 0, .key_length = key_length };
 
-	int data_len = strlen(input);
-
-	// First: try all keys from the keys[] array
-	if (keys) {
-		for (int i = 0; keys[i] != NULL && result_count < 32; i++) {
-			const char *key = keys[i];
-			int keylen = strlen(key);
-			char *output = malloc(data_len + 1);
-			for (int j = 0; j < data_len; j++) {
-				output[j] = input[j] ^ key[j % keylen];
-			}
-			output[data_len] = '\0';
-
-			results[result_count].fitness = score_english((unsigned char *)output, data_len);
-			results[result_count].key = key;
-			results[result_count].output = output;
-			result_count++;
-		}
+	if (offset == key_length) {
+		uint8_t* key = malloc(key_length);
+		memcpy(key, partial_key, key_length);
+		result.keys[result.count++] = key;
+		return result;
 	}
 
-	// Second: automatic key length guessing + brute-force
-	int keysizes[NUM_KEYSIZE_CANDIDATES];
-	guess_key_sizes(input, data_len, keysizes);
-
-	for (int i = 0; i < NUM_KEYSIZE_CANDIDATES && result_count < sizeof(results)/sizeof(results[0]); i++) {
-		int keysize = keysizes[i];
-		unsigned char *keybuf = malloc(keysize + 1);
-		double total_score = 0;
-
-		for (int j = 0; j < keysize; j++) {
-			int block_len = (data_len - j + keysize - 1) / keysize;
-			unsigned char *block = malloc(block_len);
-			for (int k = 0; k < block_len; k++) {
-				block[k] = input[j + k * keysize];
-			}
-
-			double block_score;
-			keybuf[j] = guess_single_byte_xor(block, block_len, &block_score);
-			total_score += block_score;
-			free(block);
+	for (int i = 0; key_possible_bytes[offset][i] != 0xFF; ++i) {
+		partial_key[offset] = key_possible_bytes[offset][i];
+		KeyList sub = all_keys(key_possible_bytes, key_length, offset + 1, partial_key);
+		for (int j = 0; j < sub.count; ++j) {
+			result.keys[result.count++] = sub.keys[j];
 		}
-
-		keybuf[keysize] = '\0';
-
-		char *output = malloc(data_len + 1);
-		for (int j = 0; j < data_len; j++) {
-			output[j] = input[j] ^ keybuf[j % keysize];
-		}
-		output[data_len] = '\0';
-
-		// Allocate a copy of key for result struct
-		char *final_key = malloc(keysize + 1);
-		memcpy(final_key, keybuf, keysize + 1);
-
-		results[result_count].fitness = total_score;
-		results[result_count].key = final_key;
-		results[result_count].output = output;
-		result_count++;
-
-		free(keybuf);
+		free(sub.keys);
 	}
 
-	return results;
+	return result;
+}
+
+KeyList guess_keys(sds text, char most_char) {
+	int key_length = KNOWN_KEY_LENGTH;
+	uint8_t* key_possible_bytes[MAX_KEY_LENGTH] = {0};
+
+	for (int i = 0; i < key_length; ++i) {
+		int counts[256] = {0};
+		int len = sdslen(text);
+
+		// Count characters at this offset
+		for (int pos = i; pos < len; pos += key_length) {
+			unsigned char c = text[pos];
+			counts[c]++;
+		}
+
+		// Find max count
+		int max_count = 0;
+		for (int j = 0; j < 256; ++j) {
+			if (counts[j] > max_count) {
+				max_count = counts[j];
+			}
+		}
+
+		// Collect bytes that match max count
+		key_possible_bytes[i] = malloc(256);
+		int index = 0;
+		for (int j = 0; j < 256; ++j) {
+			if (counts[j] == max_count) {
+				key_possible_bytes[i][index++] = j ^ most_char;
+			}
+		}
+		key_possible_bytes[i][index] = 0xFF;  // sentinel
+	}
+
+	uint8_t partial_key[MAX_KEY_LENGTH] = {0};
+	KeyList result = all_keys(key_possible_bytes, key_length, 0, partial_key);
+
+	for (int i = 0; i < key_length; ++i) {
+		free(key_possible_bytes[i]);
+	}
+
+	return result;
+}
+
+KeyList guess_probable_keys_for_chars(sds text, const char* try_chars) {
+	KeyList total_keys = { .keys = malloc(MAX_KEYS * sizeof(uint8_t*)), .count = 0, .key_length = KNOWN_KEY_LENGTH };
+	KeyMap* key_map = malloc(sizeof(KeyMap));
+	key_map->count = 0;
+
+	for (int i = 0; try_chars[i] != '\0'; ++i) {
+		char c = try_chars[i];
+		KeyList keys = guess_keys(text, c);
+
+		for (int j = 0; j < keys.count; ++j) {
+			// Check if already added
+			int exists = 0;
+			for (int k = 0; k < total_keys.count; ++k) {
+				if (memcmp(total_keys.keys[k], keys.keys[j], KNOWN_KEY_LENGTH) == 0) {
+					exists = 1;
+					break;
+				}
+			}
+
+			if (!exists) {
+				total_keys.keys[total_keys.count] = keys.keys[j];
+				memcpy(key_map->sources[key_map->count].key, keys.keys[j], KNOWN_KEY_LENGTH);
+				key_map->sources[key_map->count].source_char = c;
+				key_map->count++;
+				total_keys.count++;
+			} else {
+				free(keys.keys[j]);  // avoid memory leak
+			}
+		}
+
+		free(keys.keys);
+	}
+
+	free(key_map);  // clean up key_map
+
+	return total_keys;
 }

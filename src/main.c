@@ -5,12 +5,14 @@
 #include <stdio.h>
 #include "analyzers/analysis_registry.h"
 #include "solvers/solver_registry.h"
+#include "../lib/minheap/heap.h"
 
 #define PROBABILITY_THRESHOLD 0.01f
+#define MINIMUM_WORKING_FITNESS -0.1f
 
 const char *argp_program_version = "ciphter v0.1";
 const char *argp_program_bug_address = "<korbin.deary45@gmail.com>";
-static char doc[] = "ciphter — cryptography analysis and processing tool";
+static char doc[] = "ciphter - cryptography analysis and processing tool";
 static char args_doc[] = "";
 
 // Program options
@@ -96,14 +98,6 @@ typedef struct {
 	solver_output_t *results;
 } path_container_t;
 
-void add_good_results_to_path(solver_result_t *result, path_container_t *path_container) {
-	realloc(path_container->results, sizeof(solver_output_t) * (path_container->len + result->len));
-	for (size_t j = 0; j < result->len; ++j) {
-		if (result->outputs[j].fitness < PROBABILITY_THRESHOLD) continue;
-		path_container->results[path_container->len++] = result->outputs[j];
-	}
-}
-
 void free_result(solver_result_t *result) {
 	for (size_t j = 0; j < result->len; ++j) {
 		sdsfree(result->outputs[j].method);
@@ -111,54 +105,81 @@ void free_result(solver_result_t *result) {
 	}
 
 	free(result->outputs);
-	free(result);
+	result->outputs = NULL;
+}
+
+void free_output(solver_output_t *output) {
+	sdsfree(output->method);
+	sdsfree(output->data);
+}
+
+int output_compare_fn(void *output1, void *output2) {
+	solver_output_t *o1 = (solver_output_t *)output1;
+	solver_output_t *o2 = (solver_output_t *)output2;
+	if (o1->fitness > o2->fitness) return -1; // o1 is "smaller" (top of heap)
+	if (o1->fitness < o2->fitness) return 1;
+	return 0;
 }
 
 void solve(sds input, float fitness_threshold, const char *algorithms, int depth, keychain_t *keychain) {
 	printf("[INFO] Running solving on input: \"%s\"\n", input);
 	int found = 0;
-	path_container_t path_container = {0};
 
-	// Initialize path container
-	path_container.results = malloc(sizeof(solver_output_t) * 1);
-	path_container.len = 1;
-	path_container.results[0] = (solver_output_t){
+	solver_output_t input_res = {
 		.fitness = 1,
-		.method = sdsnew("INPUT"),
-		.data = sdsdup(input)
+		.method = sdsnew("CIPHERTEXT"),
+		.data = sdsdup(input),
+		.depth = 0
 	};
 
-		for(size_t i = 0; i < path_container.len; ++i) {
-			solver_output_t current = path_container.results[i];
-			for (size_t j = 0; j < solvers_count; ++j) {
-				solver_t solver = solvers[j];
+	heap path_heap = {0};
 
-				solver_result_t result = solver.fn(current.data, keychain);
-				for (size_t j = 0; j < result.len; ++j) {
-					if (result.outputs[j].fitness < fitness_threshold) {
-						result.outputs[j].fitness = 0;
-						continue;
-					}
-					printf("[%.0f%%]\t [%s] \"%s\" - Method: \"%s\"\n", result.outputs[j].fitness * 100, solver.label, result.outputs[j].data, result.outputs[j].method);
+	heap_create(&path_heap, 0, *output_compare_fn);
+	heap_insert(&path_heap, &input_res, &input_res);
 
+	while(heap_size(&path_heap) > 0) {
+		solver_output_t *current = malloc(sizeof(solver_output_t));
+		int status = heap_min(&path_heap, (void **)(&current), (void **)(&current));
+		heap_delmin(&path_heap, (void **)(&current), (void **)(&current));
 
-					found++;
-				}
-
-				add_good_results_to_path(&result, &path_container);
-				free_result(&result);
-			}
+		if (status == 0) {
+			free(current);
+			break;
 		}
 
-	// for (size_t i = 0; i < solvers_count; ++i) {
-	// 	solver_t solver = solvers[i];
-	// 	solver_result_t result = solver.fn(input, keychain);
-	// 	for (size_t j = 0; j < result.len; ++j) {
-	// 		if (result.outputs[j].fitness < fitness_threshold) continue;
-	// 		printf("[%.0f%%]\t [%s] \"%s\" - Method: \"%s\"\n", result.outputs[j].fitness * 100, solver.label, result.outputs[j].data, result.outputs[j].method);
-	// 		found++;
-	// 	}
-	// }
+		if(current->fitness > fitness_threshold) {
+			printf("[%d][%.0f%%]\t [OUTPUT] \"%s\" - Method: \"%s\"\n", current->depth, current->fitness * 100, current->data, current->method);
+		}
+
+		if (current->fitness < MINIMUM_WORKING_FITNESS || current->depth >= depth) {
+			free_output(current);
+			continue;
+		}
+		
+		for (size_t i = 0; i < solvers_count; ++i) {
+			solver_t solver = solvers[i];
+			solver_result_t result = solver.fn(current->data, keychain);
+			for (size_t j = 0; j < result.len; ++j) {
+				// printf("[%.0f%%]\t [%s] %s\n", result.outputs[j].fitness * 100, solver.label, result.outputs[j].data);
+				if (result.outputs[j].fitness < MINIMUM_WORKING_FITNESS || strcmp(current->data, result.outputs[j].data) == 0) {
+					continue;
+				}
+
+				solver_output_t *saved_output = malloc(sizeof(solver_output_t));
+				saved_output->fitness = result.outputs[j].fitness;
+				saved_output->method = sdscatprintf(sdsempty(), "%s -> %s", current->method, result.outputs[j].method);
+				saved_output->data = sdsdup(result.outputs[j].data);
+				saved_output->depth = current->depth + 1;
+
+				heap_insert(&path_heap, saved_output, saved_output);
+			}
+			free_result(&result);
+		}
+		found++;
+		free_output(current);
+	}
+
+	heap_destroy(&path_heap);
 	if (!found) {
 		printf("[INFO] No high-probability solving results found.\n");
 	}
