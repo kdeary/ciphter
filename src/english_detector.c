@@ -215,9 +215,12 @@ float score_combined(const char *text, size_t len) {
 		}
 	}
 
-	// User request: "0 non-printable = 100%, 1 = 50%, 2 = 25%..."
 	// Formula: (1/2)^N
-	if (non_printable == 0) return 1.0f;
+	if (non_printable == 0) {
+		// Bias towards English if we have a printable result
+		float eng = score_english_detailed(text, len);
+		return 1.0f + (eng * 0.1f);
+	}
 	
 	// Optimization: If too many non-printables, it's effectively 0
 	if (non_printable > 10) return 0.0001f;

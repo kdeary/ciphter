@@ -11,6 +11,7 @@
 #include "analyzers/analysis_registry.h"
 
 #include "solvers/solver_registry.h"
+#include "utils.h"
 
 #include "english_detector.h"
 
@@ -66,7 +67,10 @@ static struct argp_option options[] = {
         "silent", 's', 0, 0, "Silent mode (hide top 5 view)"
     },
     {
-        "timeout", 'T', "INT", 0, "Timeout in seconds for solving (default: 3)"
+        "timeout", 'T', "INT", 0, "Timeout in seconds for solving (default: 10)"
+    },
+    {
+        "verbose", 'v', 0, 0, "Produce verbose output"
     },
     {0}
 };
@@ -180,6 +184,9 @@ static error_t parse_opt(int key, char * arg, struct argp_state * state) {
             argp_error(state, "Timeout must be a non-negative integer.");
         }
         break;
+    case 'v':
+        verbose_flag = 1;
+        break;
     case ARGP_KEY_ARG:
         argp_usage(state);
         break;
@@ -277,7 +284,7 @@ void solve(sds input, float fitness_threshold,
         .last_solver = NULL
     };
 
-
+    int is_eng_set = english_threshold >= 0.0f;
 
     heap path_heap = {
         0
@@ -295,35 +302,68 @@ void solve(sds input, float fitness_threshold,
         .last_solver = input_res.last_solver
     };
 
-    printf("[DEBUG] English Threshold: %f\n", english_threshold);
-
     while (heap_size( & path_heap) > 0) {
+        debug_log("Heap size: %zu\n", heap_size( & path_heap));
         // Check timeout
         if (timeout > 0 && difftime(time(NULL), start_time) >= timeout) {
             printf("[INFO] Timeout reached (%ds). Stopping...\n", timeout);
             break;
         }
-
         // CRITICAL: Do NOT malloc here. heap_min retrieves a pointer already stored in the heap.
         // If we malloc, we leak that memory immediately when current is overwritten by heap_min.
         solver_output_t * current = NULL; 
         int status = heap_min( & path_heap, (void ** )( & current), (void ** )( & current));
         heap_delmin( & path_heap, (void ** )( & current), (void ** )( & current));
 
+
         if (status == 0) {
             // No need to free current here as it was never allocated in this scope
             break;
         }
 
-        if(strstr(current -> method, "AFFINE") != NULL && strstr(current -> method, "CIPHERTEXT -> BINARY -> MORSE -> RAILFENCE (k=3, o=0) -> HEX -> BASE64") != NULL) {
-            printf("[aff2] [DEBUG] [%d]\t [Agg:%.2f] [Fit:%.2f] '%s' (%s) [%s]\n",
+        // Monitor logs
+        if (monitor_path && strstr(current -> method, monitor_path) != NULL) {
+            printf("[MONITOR] [%d]\t [Agg:%.2f] [Fit:%.2f] \"%s\" - Method: \"%s\"\n",
                 current -> depth,
                 current -> cumulative_fitness,
                 current -> fitness,
                 current -> data,
-                current -> method,
-                current -> last_solver
-            );
+                current -> method);
+        }
+
+        float eng_score = 0.0f;
+        if (english_threshold >= 0.0f) {
+            eng_score = score_english_detailed(current -> data, sdslen(current -> data));
+        }
+
+        int p_set_flag = p_set && current -> fitness > fitness_threshold;
+        int eng_flag = is_eng_set && eng_score > english_threshold;
+
+        if (p_set_flag || eng_flag) {
+            ui_log_result(f_out, p_set, current -> depth, current -> fitness, current -> cumulative_fitness,
+                         "OUTPUT", current -> data, current -> method, english_threshold, eng_score, 0);
+        }
+
+        // Track best result
+
+        if(is_eng_set) {
+            if (eng_score + 1 > best_res.cumulative_fitness) {
+                free_output( & best_res);
+                best_res.fitness = current -> fitness;
+                best_res.cumulative_fitness = eng_score + 1;
+                best_res.method = sdsdup(current -> method);
+                best_res.data = sdsdup(current -> data);
+                best_res.depth = current -> depth;
+                best_res.last_solver = current -> last_solver;
+            }
+        } else if (current -> cumulative_fitness > best_res.cumulative_fitness) {
+            free_output( & best_res);
+            best_res.fitness = current -> fitness;
+            best_res.cumulative_fitness = current -> cumulative_fitness;
+            best_res.method = sdsdup(current -> method);
+            best_res.data = sdsdup(current -> data);
+            best_res.depth = current -> depth;
+            best_res.last_solver = current -> last_solver;
         }
 
         // Prioritize crib matches
@@ -338,42 +378,6 @@ void solve(sds input, float fitness_threshold,
             continue; // Stop recursion
         }
 
-        // Monitor logs
-        if (monitor_path && strstr(current -> method, monitor_path) != NULL) {
-            printf("[MONITOR] [%d]\t [Agg:%.2f] [Fit:%.2f] \"%s\" - Method: \"%s\"\n",
-                current -> depth,
-                current -> cumulative_fitness,
-                current -> fitness,
-                current -> data,
-                current -> method);
-        }
-
-        // Track best result
-        if (current -> cumulative_fitness > best_res.cumulative_fitness) {
-            free_output( & best_res);
-            best_res.fitness = current -> fitness;
-            best_res.cumulative_fitness = current -> cumulative_fitness;
-            best_res.method = sdsdup(current -> method);
-            best_res.data = sdsdup(current -> data);
-            best_res.depth = current -> depth;
-            best_res.last_solver = current -> last_solver;
-        }
-
-        // Only print if fitness is high enough
-
-        float eng_score = 0.0f;
-        if (english_threshold >= 0.0f) {
-            eng_score = score_english_detailed(current -> data, sdslen(current -> data));
-        }
-
-        int p_set_flag = p_set && current -> fitness > fitness_threshold;
-        int eng_flag = english_threshold >= 0.0f && eng_score > english_threshold;
-
-        if (p_set_flag || eng_flag) {
-            ui_log_result(f_out, p_set, current -> depth, current -> fitness, current -> cumulative_fitness,
-                         "OUTPUT", current -> data, current -> method, english_threshold, eng_score, 0);
-        }
-
         if (current -> depth >= depth) {
             free_output(current);
             continue;
@@ -385,6 +389,8 @@ void solve(sds input, float fitness_threshold,
             if (current -> last_solver && strcmp(current -> last_solver, solver.label) == 0 && solver.prevent_consecutive) {
                 continue;
             }
+
+            // printf("[SOLVER] test: %s\n", solver.label);
 
             solver_result_t result = solver.fn(current -> data, keychain);
 
@@ -408,16 +414,17 @@ void solve(sds input, float fitness_threshold,
                 saved_output -> depth = current -> depth + 1;
                 saved_output -> last_solver = solver.label;
 
-                if(strstr(saved_output -> method, "AFFINE") != NULL && strstr(saved_output -> method, "CIPHERTEXT -> BINARY -> MORSE -> RAILFENCE (k=3, o=0) -> HEX -> BASE64") != NULL) {
-                    printf("[DEBUG] [%d]\t [Agg:%.2f] [Fit:%.2f] '%s' (%s) [%s]\n",
-                        saved_output -> depth,
-                        saved_output -> cumulative_fitness,
-                        saved_output -> fitness,
-                        saved_output -> data,
-                        saved_output -> method,
-                        saved_output -> last_solver
-                    );
-                }
+                // if(
+                //     strstr(saved_output -> method, "AFFINE") != NULL && strstr(saved_output -> method, "CIPHERTEXT -> BINARY -> MORSE -> RAILFENCE (k=3, o=0) -> HEX -> BASE64") != NULL) {
+                //     printf("[DEBUG] [%d]\t [Agg:%.2f] [Fit:%.2f] '%s' (%s) [%s]\n",
+                //         saved_output -> depth,
+                //         saved_output -> cumulative_fitness,
+                //         saved_output -> fitness,
+                //         saved_output -> data,
+                //         saved_output -> method,
+                //         saved_output -> last_solver
+                //     );
+                // }
 
                 heap_insert( & path_heap, saved_output, saved_output);
             }
@@ -448,7 +455,7 @@ void solve(sds input, float fitness_threshold,
     }
     
     // Always print the best result found so far
-    printf("\n--- Best Result (Agg:%.2f) ---\n", best_res.cumulative_fitness);
+    printf("\n--- Best Result (Agg:%.2f) IS_ENGLISH_MODE=%d ---\n", best_res.cumulative_fitness, is_eng_set);
     printf("[%d][%.0f%%]\t \"%s\"\nMethod: \"%s\"\n",
         best_res.depth, best_res.fitness * 100, best_res.data, best_res.method);
     printf("----------------------------------\n\n");
@@ -469,7 +476,7 @@ int main(int argc, char * argv[]) {
         .output_file = NULL,
         .p_set = 0,
         .silent = 0,
-        .timeout = 3
+        .timeout = 10
     };
 
     struct argp argp = {
@@ -501,22 +508,22 @@ int main(int argc, char * argv[]) {
         int count = 0;
         sds * tokens = sdssplitlen(raw_keys, sdslen(raw_keys), "|", 1, & count);
 
-        printf("[DEBUG] Algorithms: %s\n", args.algorithms);
-        printf("[DEBUG] Depth: %d\n", args.depth);
+        debug_log("Algorithms: %s\n", args.algorithms);
+        debug_log("Depth: %d\n", args.depth);
 
-        printf("[DEBUG] Keys: ");
+        debug_log("Keys: ");
         for (int i = 0; i < count; i++) {
-            printf("%s / ", tokens[i]);
+            debug_log("%s / ", tokens[i]);
         }
-        printf("\n");
+        debug_log("\n");
 
         keychain_t keychain = {
             .len = count,
             .keys = tokens
         };
 
-        printf("[DEBUG] Probability Threshold: %f\n", args.probability_threshold / 100.0f);
-        printf("[DEBUG] English Threshold: %f\n", args.english_threshold / 100.0f);
+        debug_log("Probability Threshold: %f\n", args.probability_threshold / 100.0f);
+        debug_log("English Threshold: %f\n", args.english_threshold / 100.0f);
 
         solve(args.input, args.probability_threshold / 100.0f, args.algorithms, args.depth, & keychain, args.crib, args.english_threshold / 100.0f, args.monitor_path, args.output_file, args.p_set, args.silent, args.timeout);
         args.input = NULL; // solve frees it

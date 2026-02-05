@@ -1,5 +1,7 @@
 #include "utils.h"
 
+int verbose_flag = 0;
+
 #include <ctype.h>
 
 #include <math.h>
@@ -214,6 +216,11 @@ int output_compare_fn(void * output1, void * output2) {
 
     if (score1 > score2) return -1; // o1 is "smaller" (top of heap/best)
     if (score1 < score2) return 1;
+
+    // Tie-break: favor higher cumulative fitness (deeper paths with same average quality)
+    if (o1 -> cumulative_fitness > o2 -> cumulative_fitness) return -1;
+    if (o1 -> cumulative_fitness < o2 -> cumulative_fitness) return 1;
+
     return 0;
 }
 

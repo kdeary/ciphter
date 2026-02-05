@@ -12,6 +12,9 @@
 #define PRINTABLE_PENALTY_POWER 0.5f
 #define ENGLISH_FREQ_POWER 8.0f
 
+extern int verbose_flag;
+#define debug_log(fmt, ...) do { if (verbose_flag) { printf("[DEBUG] " fmt, ##__VA_ARGS__); } } while (0)
+
 // Converters
 int hex_char_to_int(char c);
 unsigned char *hex_to_bytes(const char *hex, int *out_len);

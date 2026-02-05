@@ -12,14 +12,13 @@
 
 #define solver_fn(fn_label) static solver_result_t solve_ ## fn_label(sds input, keychain_t * keychain)
 #define SOLVER(fn_label, p_score, consecutive) { .label = #fn_label, .popularity = p_score, .prevent_consecutive = consecutive, .fn = solve_ ## fn_label }
-#define DEBUG 1
 #define ALPHABET_SIZE 26
 
 // Solver Constants
 #define VIGENERE_THRESHOLD 0.01f
 
 // Affine, Railfence, Vigenere fitness have lower base scores because its outputs always have only printable characters
-#define BASIC_DEFAULT_FITNESS 0.75f
+#define SIMPLE_CIPHER_FITNESS_FACTOR 0.9f
 #define PENALTY_FACTOR 0.01f
 
 typedef struct {
@@ -209,12 +208,12 @@ solver_fn(AFFINE) {
             free(plain);
 
             float penalty = ((float) a * ALPHABET_SIZE + (float) b) / (ALPHABET_SIZE * ALPHABET_SIZE);
-            float fitness = BASIC_DEFAULT_FITNESS - (penalty * PENALTY_FACTOR);
+            float fitness = score_combined(decrypted, sdslen(decrypted)) - (penalty * PENALTY_FACTOR);
 
             result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
             result.outputs[candidates].data = decrypted;
             result.outputs[candidates].method = sdscatprintf(sdsempty(), "AFFINE a=%d b=%d", a, b);
-            result.outputs[candidates].fitness = fitness;
+            result.outputs[candidates].fitness = fitness * SIMPLE_CIPHER_FITNESS_FACTOR;
             candidates++;
         }
     }
@@ -265,12 +264,12 @@ static solver_result_t solve_VIGENERE(sds input, keychain_t * keychain) {
         }
 
         float penalty = ((float) k) / keychain -> len;
-        float fitness = BASIC_DEFAULT_FITNESS - (penalty * PENALTY_FACTOR);
+        float fitness = score_combined(output, sdslen(output)) - (penalty * PENALTY_FACTOR);
 
         result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
         result.outputs[candidates].data = output;
         result.outputs[candidates].method = sdscatprintf(sdsempty(), "VIGENERE(%s)", key);
-        result.outputs[candidates].fitness = fitness;
+        result.outputs[candidates].fitness = fitness * SIMPLE_CIPHER_FITNESS_FACTOR;
         candidates++;
     }
 
@@ -328,12 +327,12 @@ solver_fn(RAILFENCE) {
             free(matrix);
 
             float penalty = ((float) k) / max_rails;
-            float fitness = BASIC_DEFAULT_FITNESS - (penalty * PENALTY_FACTOR);
+            float fitness = score_combined(plain, sdslen(plain)) - (penalty * PENALTY_FACTOR);
 
             result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
             result.outputs[candidates].data = plain;
             result.outputs[candidates].method = sdscatprintf(sdsempty(), "RAILFENCE (k=%d, o=%d)", k, o);
-            result.outputs[candidates].fitness = fitness;
+            result.outputs[candidates].fitness = fitness * SIMPLE_CIPHER_FITNESS_FACTOR;
             candidates++;
         }
     }
@@ -492,7 +491,7 @@ solver_t solvers[] = {
     SOLVER(AFFINE, 0.5, 1),
     SOLVER(VIGENERE, 0.5, 0),
     SOLVER(BASE, 0.5, 0),
-    SOLVER(RAILFENCE, 0.5, 0),
+    SOLVER(RAILFENCE, 0.5, 1),
     SOLVER(MORSE, 0.5, 0),
 };
 
