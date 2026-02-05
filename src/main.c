@@ -14,8 +14,8 @@
 
 #include "english_detector.h"
 
+#include <ctype.h>
 #include "../lib/minheap/heap.h"
-#include "ui.h"
 
 #define PROBABILITY_THRESHOLD 0.01f
 
@@ -232,15 +232,15 @@ void solve(sds input, float fitness_threshold,
         const char * crib, int english_threshold,
             const char * monitor_path, char * output_file, int p_set, int silent) {
     
-    ui_init(silent);
-    ui_log("[INFO] Running solving on input: \"%s\"\n", input);
+    // ui_init(silent); REMOVED
+    printf("[INFO] Running solving on input: \"%s\"\n", input);
     int found = 0;
 
     FILE * f_out = NULL;
     if (output_file) {
         f_out = fopen(output_file, "w");
         if (!f_out) {
-            ui_log("[ERROR] Could not open output file: %s\n", output_file);
+            printf("[ERROR] Could not open output file: %s\n", output_file);
         }
     }
 
@@ -248,15 +248,15 @@ void solve(sds input, float fitness_threshold,
     size_t solvers_count = 0;
     solver_t * solvers = get_solvers(algorithms, & solvers_count);
 
-    ui_log("[INFO] Loaded %zu algorithms: ", solvers_count);
+    printf("[INFO] Loaded %zu algorithms: ", solvers_count);
     for (size_t i = 0; i < solvers_count; ++i) {
-        ui_log("%s", solvers[i].label);
-        if (i < solvers_count - 1) ui_log(", ");
+        printf("%s", solvers[i].label);
+        if (i < solvers_count - 1) printf(", ");
     }
-    ui_log("\n");
+    printf("\n");
 
     if (!silent) {
-        ui_log("[INFO] Press SPACE to toggle/update the Top 5 Fitness View.\n");
+        // printf("[INFO] Press SPACE to toggle/update the Top 5 Fitness View.\n"); // Removed prompt as UI is gone
     }
 
     int lines_printed = 0;
@@ -281,19 +281,18 @@ void solve(sds input, float fitness_threshold,
 
     while (heap_size( & path_heap) > 0) {
         // UI Check Input
-        ui_check_input();
+        // ui_check_input(); REMOVED
 
-        solver_output_t * current = malloc(sizeof(solver_output_t));
+        // CRITICAL: Do NOT malloc here. heap_min retrieves a pointer already stored in the heap.
+        // If we malloc, we leak that memory immediately when current is overwritten by heap_min.
+        solver_output_t * current = NULL; 
         int status = heap_min( & path_heap, (void ** )( & current), (void ** )( & current));
         heap_delmin( & path_heap, (void ** )( & current), (void ** )( & current));
 
         if (status == 0) {
-            free(current);
+            // No need to free current here as it was never allocated in this scope
             break;
         }
-
-        // Update Top 5
-        ui_update_top5(current->fitness, current->cumulative_fitness, current->data, current->method, current->depth);
 
         // Prioritize crib matches
         if (crib && strstr(current -> data, crib) != NULL) {
@@ -303,7 +302,7 @@ void solve(sds input, float fitness_threshold,
             float display_fitness = current -> fitness;
             float display_agg = current -> cumulative_fitness;
 
-            ui_log("[%d][%.0f%%][Agg:%.2f]\t [CRIB FOUND] \"%s\" - Method: \"%s\"\n",
+            printf("[%d][%.0f%%][Agg:%.2f]\t [CRIB FOUND] \"%s\" - Method: \"%s\"\n",
                 current -> depth, display_fitness * 100, display_agg, current -> data, current -> method);
             if (f_out) fprintf(f_out, "[%d][%.0f%%][Agg:%.2f]\t [CRIB FOUND] \"%s\" - Method: \"%s\"\n",
                 current -> depth, display_fitness * 100, display_agg, current -> data, current -> method);
@@ -314,7 +313,7 @@ void solve(sds input, float fitness_threshold,
 
         // Monitor logs
         if (monitor_path && strstr(current -> method, monitor_path) != NULL) {
-            ui_log("[MONITOR] [%d]\t [Agg:%.2f] [Fit:%.2f] \"%s\" - Method: \"%s\"\n",
+            printf("[MONITOR] [%d]\t [Agg:%.2f] [Fit:%.2f] \"%s\" - Method: \"%s\"\n",
                 current -> depth,
                 current -> cumulative_fitness,
                 current -> fitness,
@@ -344,7 +343,7 @@ void solve(sds input, float fitness_threshold,
 
                 if (p_set || english_threshold >= 0) {
                     // Regular verbose output
-                    ui_log("[%d][%.0f%%][Agg:%.2f]\t [OUTPUT] \"%s\" - Method: \"%s\"\n",
+                    printf("[%d][%.0f%%][Agg:%.2f]\t [OUTPUT] \"%s\" - Method: \"%s\"\n",
                         current -> depth,
                         current -> fitness * 100,
                         current -> cumulative_fitness,
@@ -389,21 +388,32 @@ void solve(sds input, float fitness_threshold,
 
                 heap_insert( & path_heap, saved_output, saved_output);
             }
-            free_result( & result);
+            
+            // CLEANUP: Free the result structure and its contents
+            for(size_t j=0; j<result.len; j++) {
+                sdsfree(result.outputs[j].data);
+                sdsfree(result.outputs[j].method);
+            }
+            if (result.outputs) free(result.outputs);
         }
         found++;
         free_output(current);
+        
+        // CRITICAL: input_res is on the stack. Freeing it corrupts the heap!
+        if (current != &input_res) {
+            free(current);
+        }
     }
 
     heap_destroy( & path_heap);
     if (f_out) fclose(f_out);
-    ui_cleanup();
+    // ui_cleanup(); REMOVED
 
     if (!found) {
-        ui_log("[INFO] No high-probability solving results found.\n");
+        printf("[INFO] No high-probability solving results found.\n");
     }
     
-    ui_log("[INFO] Solving process finished.\n");
+    printf("[INFO] Solving process finished.\n");
 }
 
 int main(int argc, char * argv[]) {

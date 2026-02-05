@@ -251,6 +251,77 @@ static solver_result_t solve_VIGENERE(sds input, keychain_t * keychain) {
     return result;
 }
 
+
+
+solver_fn(BASE) {
+    solver_result_t result = {
+        .len = 0,
+        .outputs = NULL,
+    };
+
+    int candidates = 0;
+    int len = sdslen(input);
+    if (len == 0) return result;
+
+    // Try bases 2 through 36
+    for (int base = 2; base <= 36; base++) {
+        // Validate if input is valid for this base
+        int is_valid = 1;
+        for (int i = 0; i < len; i++) {
+            int val = -1;
+            char c = input[i];
+            
+            if (isdigit(c)) val = c - '0';
+            else if (islower(c)) val = c - 'a' + 10;
+            else if (isupper(c)) val = c - 'A' + 10;
+
+            if (val == -1 || val >= base) {
+                is_valid = 0;
+                break;
+            }
+        }
+
+        if (!is_valid) continue;
+
+        // Perform base conversion to decimal using unsigned long long
+        unsigned long long acc = 0;
+        int overflow = 0;
+
+        for (int i = 0; i < len; i++) {
+            char c = input[i];
+            int val = 0;
+            if (isdigit(c)) val = c - '0';
+            else if (islower(c)) val = c - 'a' + 10;
+            else if (isupper(c)) val = c - 'A' + 10;
+
+            // Check overflow: acc * base + val > ULLONG_MAX
+            if (acc > (0xFFFFFFFFFFFFFFFFULL - val) / base) {
+                overflow = 1;
+                break;
+            }
+
+            acc = acc * base + val;
+        }
+
+        if (overflow) {
+            continue;
+        }
+        
+        sds decimal_str = sdsfromlonglong(acc);
+
+        result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
+        result.outputs[candidates].data = decimal_str;
+        result.outputs[candidates].method = sdscatprintf(sdsempty(), "BASE (base %d)", base);
+        result.outputs[candidates].fitness = 0.5f; // Neutral fitness
+        candidates++;
+    }
+
+    result.len = candidates;
+    return result;
+}
+
+
+
 solver_t solvers[] = {
     SOLVER(HEX, 1, 0),
     SOLVER(BASE64, 1, 0),
@@ -258,6 +329,7 @@ solver_t solvers[] = {
     SOLVER(OCTAL, 0.75, 0),
     SOLVER(AFFINE, 0.5, 1),
     SOLVER(VIGENERE, 0.5, 1),
+    SOLVER(BASE, 0.5, 1),
 };
 
 size_t solvers_count = sizeof(solvers) / sizeof(solver_t);
