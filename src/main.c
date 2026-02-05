@@ -9,7 +9,6 @@
 #include "../lib/minheap/heap.h"
 
 #define PROBABILITY_THRESHOLD 0.01f
-#define MINIMUM_WORKING_FITNESS -0.1f
 
 const char *argp_program_version = "ciphter v0.1";
 const char *argp_program_bug_address = "<korbin.deary45@gmail.com>";
@@ -272,7 +271,7 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
              }
 		}
 
-		if (current->fitness < MINIMUM_WORKING_FITNESS || current->depth >= depth) {
+		if (current->depth >= depth) {
 			free_output(current);
 			continue;
 		}

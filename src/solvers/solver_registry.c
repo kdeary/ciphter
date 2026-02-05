@@ -2,7 +2,7 @@
 #include <string.h>
 #include "../../lib/sds/sds.h"
 #include "solver_registry.h"
-#include "xor.h"
+
 #include "../utils.h"
 #include "../english_detector.h"
 
@@ -10,6 +10,11 @@
 #define SOLVER(fn_label, p_score, consecutive) { .label = #fn_label, .popularity = p_score, .prevent_consecutive = consecutive, .fn = solve_ ## fn_label }
 #define DEBUG 1
 #define ALPHABET_SIZE 26
+
+// Solver Constants
+#define VIGENERE_THRESHOLD 0.05f
+#define AFFINE_A_WEIGHT 30.0f
+#define AFFINE_DIVISOR 2000.0f
 
 // hex string to bytes
 solver_fn(HEX) {
@@ -123,9 +128,9 @@ solver_fn(AFFINE) {
             // Start with base fitness, then subtract a tiny amount based on 'a' and 'b'.
             // This ensures "a=1 b=0" (simpler) > "a=3 b=10" (complex) given equal valid English output.
 			if (fitness > 0) {
-                // User requested priority: a=1 (all b), then a=higher.
+            // User requested priority: a=1 (all b), then a=higher.
                 // Since max b=25, weighting a by 30 ensures a dominates b.
-				float penalty = ((float)a * 30.0f + (float)b) / 2000.0f; 
+				float penalty = ((float)a * AFFINE_A_WEIGHT + (float)b) / AFFINE_DIVISOR; 
 				fitness = fitness - (penalty * 0.01f);
 				if (fitness < 0) fitness = 0.001f; // Don't allow negative or zero if it was valid
 			} else {
@@ -245,7 +250,9 @@ static solver_result_t solve_VIGENERE(sds input, keychain_t *keychain) {
         
         float fitness = fitness_english_freq(output);
         
-        if (fitness > 0.05f) {
+
+
+        if (fitness > VIGENERE_THRESHOLD) {
            result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
            result.outputs[candidates].data = output;
            result.outputs[candidates].method = sdscatprintf(sdsempty(), "VIGENERE(key=%s)", key);

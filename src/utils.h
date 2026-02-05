@@ -9,6 +9,11 @@
 #include "../lib/sds/sds.h"
 #include "solvers/solver_registry.h" 
 
+#define PRINTABLE_PENALTY_POWER 0.5f
+#define ENGLISH_FREQ_POWER 8.0f
+
+
+
 // Converters
 int hex_char_to_int(char c);
 unsigned char *hex_to_bytes(const char *hex, int *out_len);

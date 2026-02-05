@@ -137,6 +137,18 @@ float score_english_casing(const char *text, size_t len) {
     return (casing_score * 0.6f) + (sentence_score * 0.4f);
 }
 
+// Scoring Constants
+#define BIGRAM_CUTOFF 0.28f
+#define BIGRAM_RANGE (0.55f - 0.28f)
+
+#define CASING_MAX_RATIO_SHORT 0.40f
+#define CASING_MAX_RATIO_LONG 0.20f
+#define CASING_PENALTY_LOWERCASE 0.2f
+#define CASING_PENALTY_SHORT_NON_IDEAL 0.5f
+
+#define SENTENCE_WEIGHT 0.4f
+#define CASING_WEIGHT 0.6f
+
 static const float ENGLISH_FREQ[26] = {
 	0.08167, 0.01492, 0.02782, 0.04253, 0.12702, 0.02228, 0.02015, 0.06094,
     0.06966, 0.00153, 0.00772, 0.04025, 0.02406, 0.06749, 0.07507, 0.01929, 
@@ -166,27 +178,7 @@ static float score_letter_frequency(const char *text, size_t len) {
     return 50.0f / (50.0f + chi_sq);
 }
 
-// Check if string looks like valid Base64 (structure only)
-float score_base64_like(const char *text, size_t len) {
-    if (len % 4 != 0 && len > 0) return 0.0f; // Base64 usually padded to 4 chars
-    if (len == 0) return 0.0f;
-    
-    int padding = 0;
-    for (size_t i = 0; i < len; i++) {
-        unsigned char c = (unsigned char)text[i];
-        if (isalnum(c) || c == '+' || c == '/') {
-            if (padding > 0) return 0.0f; // Padding must be at the end
-        } else if (c == '=') {
-            padding++;
-        } else {
-            return 0.0f; // Invalid char
-        }
-    }
-    
-    if (padding > 2) return 0.0f; // Max 2 padding chars
-    
-    return 1.0f;
-}
+
 
 static float score_printable(const char *text, size_t len) {
     if (len == 0) return 0.0f;
@@ -200,13 +192,14 @@ static float score_printable(const char *text, size_t len) {
     return (float)printable / len;
 }
 
+// Uses weights defined in utils.h
 float score_english_detailed(const char *text, size_t len) {
     float s_bigram = score_english_bigram(text, len);
     float s_casing = score_english_casing(text, len);
     float s_freq = score_letter_frequency(text, len);
-    float s_printable = score_printable(text, len);
+    // float s_printable = score_printable(text, len); // Unused in weighting, but gathered
 
-    return (s_freq * 0.3f) + (s_bigram * 0.5f) + (s_casing * 0.2f);
+    return (s_freq * WEIGHT_FREQ) + (s_bigram * WEIGHT_BIGRAM) + (s_casing * WEIGHT_CASING);
 }
 
 // New main fitness scoring for solvers - purely printable (with penalty for non-printable)
