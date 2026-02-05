@@ -31,7 +31,7 @@ static struct argp_option options[] = {
         "input-file", 'I', "FILE", 0, "Ciphertext input from file"
     },
     {
-        "probability", 'p', "INT", 0, "Probability/Fitness (Printable) threshold (0-100)"
+        "probability", 'p', "INT", 0, "Probability/Fitness threshold (0-100)"
     },
     {
         "english", 'E', "INT", 0, "English quality threshold (0-100) for output filtering"
