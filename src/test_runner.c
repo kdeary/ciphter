@@ -5,8 +5,22 @@
 #include <windows.h>
 #include "../lib/sds/sds.h"
 
+volatile BOOL stop_tests = FALSE;
+HANDLE hCurrentProcess = NULL;
+
+BOOL WINAPI HandlerRoutine(DWORD dwCtrlType) {
+    if (dwCtrlType == CTRL_C_EVENT) {
+        stop_tests = TRUE;
+        if (hCurrentProcess) {
+            TerminateProcess(hCurrentProcess, 0);
+        }
+        return TRUE;
+    }
+    return FALSE;
+}
+
 // Custom function to run command and allow killing it early
-int run_command_with_early_exit(const char *cmd, const char *expected) {
+int run_command_with_early_exit(const char *cmd, const char *expected, sds *captured_output) {
     HANDLE hChildStd_OUT_Rd = NULL;
     HANDLE hChildStd_OUT_Wr = NULL;
 
@@ -37,6 +51,8 @@ int run_command_with_early_exit(const char *cmd, const char *expected) {
         return 0;
     }
 
+    hCurrentProcess = piProcInfo.hProcess;
+
     CloseHandle(hChildStd_OUT_Wr);
 
     DWORD dwRead;
@@ -60,10 +76,15 @@ int run_command_with_early_exit(const char *cmd, const char *expected) {
 
     WaitForSingleObject(piProcInfo.hProcess, INFINITE);
 
+    if (captured_output) {
+        *captured_output = sdsdup(output_acc);
+    }
+
     sdsfree(output_acc);
     CloseHandle(piProcInfo.hProcess);
     CloseHandle(piProcInfo.hThread);
     CloseHandle(hChildStd_OUT_Rd);
+    hCurrentProcess = NULL;
 
     return found;
 }
@@ -79,6 +100,7 @@ void run_csv_test(const char *filename) {
     char line[16384];
     int line_num = 0;
     while (fgets(line, sizeof(line), fp)) {
+        if (stop_tests) break;
         line_num++;
         if (line_num == 1) continue; // Skip header
 
@@ -104,7 +126,7 @@ void run_csv_test(const char *filename) {
         printf("[RUN] %s (depth %d)... ", name, depth);
         fflush(stdout);
 
-        sds cmd = sdsnew("bin/ciphter.exe -t S -s "); 
+        sds cmd = sdsnew("bin/ciphter.exe -t S -s -T 5 "); 
         cmd = sdscatprintf(cmd, "-d %d ", depth);
         cmd = sdscatprintf(cmd, "-i \"%s\" ", ciphertext);
         
@@ -121,14 +143,19 @@ void run_csv_test(const char *filename) {
             cmd = sdscatprintf(cmd, "-c \"%s\" ", crib);
         }
 
-        int pass = run_command_with_early_exit(cmd, expected_plaintext);
+        sds captured = NULL;
+        int pass = run_command_with_early_exit(cmd, expected_plaintext, &captured);
 
         if (pass) {
             printf("PASS\n");
         } else {
             printf("FAIL\n      Expected: %s\n", expected_plaintext);
+            if (captured) {
+                printf("      Actual Output:\n%s\n", captured);
+            }
         }
 
+        if (captured) sdsfree(captured);
         sdsfree(cmd);
         sdsfreesplitres(tokens, count);
     }
@@ -140,7 +167,12 @@ int main() {
     struct dirent *dir;
     d = opendir("tests");
     if (d) {
+        if (!SetConsoleCtrlHandler(HandlerRoutine, TRUE)) {
+            printf("[ERROR] Could not set control handler\n");
+            return 1;
+        }
         while ((dir = readdir(d)) != NULL) {
+            if (stop_tests) break;
             if (strstr(dir->d_name, ".csv") != NULL) {
                 sds path = sdscatprintf(sdsempty(), "tests/%s", dir->d_name);
                 run_csv_test(path);

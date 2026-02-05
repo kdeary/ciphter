@@ -40,10 +40,10 @@ static struct argp_option options[] = {
         "monitor", 'm', "STRING", 0, "Monitor specific path substring (debug logging)"
     },
     {
-        "algorithms", 'a', "STRING", 0, "Algorithms to use [process only]"
+        "algorithms", 'a', "STRING", 0, "Algorithms to use [process only] (default: common)"
     },
     {
-        "depth", 'd', "INT", 0, "Depth of algorithm combinations [process only]"
+        "depth", 'd', "INT", 0, "Depth of algorithm combinations [process only] (default: 1)"
     },
     {
         "keys", 'k', "STRING", 0, "Keys (raw)"
@@ -335,7 +335,6 @@ void solve(sds input, float fitness_threshold,
     printf("[INFO] Running solvers...\n");
 
     while (heap_size( & path_heap) > 0) {
-        debug_log("Heap size: %zu\n", heap_size( & path_heap));
         // Check timeout
         if (timeout > 0 && difftime(time(NULL), start_time) >= timeout) {
             printf("[INFO] Timeout reached (%ds). Stopping...\n", timeout);
@@ -376,6 +375,11 @@ void solve(sds input, float fitness_threshold,
                          "OUTPUT", current -> data, current -> method, english_threshold, eng_score, 0);
         }
 
+        if (crib && strstr(current -> data, crib) != NULL) {
+            current -> fitness += 2.0f;
+            current -> cumulative_fitness += 9999.0f;
+        }
+
         // Track best result
 
         if(is_eng_set) {
@@ -413,6 +417,13 @@ void solve(sds input, float fitness_threshold,
         if (current -> depth >= depth) {
             free_output(current);
             continue;
+        }
+
+        if (max_heap_size > 0) {
+            if(heap_size(&path_heap) > max_heap_size) {
+                // debug_log("Pruning heap from %zu to %d\n", heap_size( & path_heap), max_heap_size);
+                prune_heap(&path_heap, max_heap_size);
+            }
         }
 
         for (size_t i = 0; i < solvers_count; ++i) {
@@ -475,7 +486,10 @@ void solve(sds input, float fitness_threshold,
         }
 
         if (max_heap_size > 0) {
-            prune_heap(&path_heap, max_heap_size);
+            if(heap_size(&path_heap) > max_heap_size) {
+                // debug_log("Pruning heap from %zu to %d\n", heap_size( & path_heap), max_heap_size);
+                prune_heap(&path_heap, max_heap_size);
+            }
         }
     } // End of while loop
 
@@ -513,7 +527,7 @@ int main(int argc, char * argv[]) {
         .p_set = 0,
         .silent = 0,
         .timeout = 10,
-        .max_heap_size = 1000
+        .max_heap_size = 10000
     };
 
     struct argp argp = {
