@@ -66,7 +66,7 @@ int hex_char_to_int(char c) {
 
 float fitness_english_freq(sds data) {
     int len = sdslen(data);
-    if (len == 0) return 0.0 f;
+    if (len == 0) return 0.0f;
 
     int letter_counts[26] = {
         0
@@ -81,28 +81,28 @@ float fitness_english_freq(sds data) {
         }
     }
 
-    if (total_letters == 0) return 0.0 f;
+    if (total_letters == 0) return 0.0f;
 
     // Calculate chi-squared score
-    float score = 0.0 f;
+    float score = 0.0f;
     for (int i = 0; i < 26; i++) {
         float observed = (float) letter_counts[i];
         float expected = english_freq[i] * total_letters;
-        if (expected > 0.0 f) {
+        if (expected > 0.0f) {
             float diff = observed - expected;
             score += (diff * diff) / expected;
         }
     }
 
     // Lower chi-squared score means better match; invert it to match higher-is-better pattern
-    return 1.0 f / (1.0 f + score);
+    return 1.0f / (1.0f + score);
 }
 
 float fitness_heuristic(sds data) {
     int len = sdslen(data);
-    float score = 0.0 f;
+    float score = 0.0f;
     for (int i = 0; i < len; i++) {
-        if (isprint(data[i])) score += 1.0 f;
+        if (isprint(data[i])) score += 1.0f;
     }
 
     if (len > 0) {
@@ -110,7 +110,7 @@ float fitness_heuristic(sds data) {
         // Exponential punishment for non-printable characters
         return (float) pow(ratio, 8.0);
     } else {
-        return 0.0 f;
+        return 0.0f;
     }
 }
 
@@ -267,8 +267,8 @@ int output_compare_fn(void * output1, void * output2) {
     solver_output_t * o2 = (solver_output_t * ) output2;
 
     // Normalize by depth to prevent Depth-First Search behavior from dominating
-    float score1 = o1 -> cumulative_fitness / (o1 -> depth + 1.0 f);
-    float score2 = o2 -> cumulative_fitness / (o2 -> depth + 1.0 f);
+    float score1 = o1 -> cumulative_fitness / (o1 -> depth + 1.0f);
+    float score2 = o2 -> cumulative_fitness / (o2 -> depth + 1.0f);
 
     if (score1 > score2) return -1; // o1 is "smaller" (top of heap/best)
     if (score1 < score2) return 1;
@@ -291,7 +291,7 @@ solver_output_t * clone_output(solver_output_t * src) {
 }
 
 float get_score(solver_output_t * o) {
-    return o -> cumulative_fitness / (o -> depth + 1.0 f);
+    return o -> cumulative_fitness / (o -> depth + 1.0f);
 }
 
 int update_top_results(solver_output_t * candidate) {
@@ -336,8 +336,8 @@ void print_top_results(int * lines_printed) {
             float display_fitness = top_results[i] -> fitness;
             float display_agg = top_results[i] -> cumulative_fitness;
 
-            if (display_fitness > 5000.0 f) display_fitness -= 10000.0 f;
-            if (display_agg > 5000.0 f) display_agg -= 10000.0 f;
+            if (display_fitness > 5000.0f) display_fitness -= 10000.0f;
+            if (display_agg > 5000.0f) display_agg -= 10000.0f;
 
             printf("\033[K"); // Clear line
             printf("[%d][%.0f%%][Agg:%.2f]\t [OUTPUT] \"%.20s...\" - Method: \"%s\"\n",

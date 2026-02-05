@@ -10,17 +10,15 @@
 
 #include "../english_detector.h"
 
-#define solver_fn(fn_label) static solver_result_t solve_ # # fn_label(sds input, keychain_t * keychain)
-#define SOLVER(fn_label, p_score, consecutive) {
-    .label = #fn_label, .popularity = p_score, .prevent_consecutive = consecutive, .fn = solve_ # # fn_label
-}
+#define solver_fn(fn_label) static solver_result_t solve_ ## fn_label(sds input, keychain_t * keychain)
+#define SOLVER(fn_label, p_score, consecutive) { .label = #fn_label, .popularity = p_score, .prevent_consecutive = consecutive, .fn = solve_ ## fn_label }
 #define DEBUG 1
 #define ALPHABET_SIZE 26
 
 // Solver Constants
-#define VIGENERE_THRESHOLD 0.05 f
-#define AFFINE_A_WEIGHT 30.0 f
-#define AFFINE_DIVISOR 2000.0 f
+#define VIGENERE_THRESHOLD 0.01f
+#define AFFINE_A_WEIGHT 30.0f
+#define AFFINE_DIVISOR 2000.0f
 
 // hex string to bytes
 solver_fn(HEX) {
@@ -137,10 +135,10 @@ solver_fn(AFFINE) {
                 // User requested priority: a=1 (all b), then a=higher.
                 // Since max b=25, weighting a by 30 ensures a dominates b.
                 float penalty = ((float) a * AFFINE_A_WEIGHT + (float) b) / AFFINE_DIVISOR;
-                fitness = fitness - (penalty * 0.01 f);
-                if (fitness < 0) fitness = 0.001 f; // Don't allow negative or zero if it was valid
+                fitness = fitness - (penalty * 0.01f);
+                if (fitness < 0) fitness = 0.001f; // Don't allow negative or zero if it was valid
             } else {
-                fitness = 0.0 f;
+                fitness = 0.0f;
             }
 
             result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
@@ -203,13 +201,10 @@ solver_fn(OCTAL) {
     result.outputs[0].data = sdsnewlen(data, len);
     result.outputs[0].method = sdsnew("OCTAL");
     result.outputs[0].fitness = score_combined(result.outputs[0].data, len);
-    // Removed length penalty
 
     free(data);
     return result;
 }
-
-// Ordered by popularity/commonness
 
 static solver_result_t solve_VIGENERE(sds input, keychain_t * keychain) {
     solver_result_t result = {
@@ -256,7 +251,7 @@ static solver_result_t solve_VIGENERE(sds input, keychain_t * keychain) {
         if (fitness > VIGENERE_THRESHOLD) {
             result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
             result.outputs[candidates].data = output;
-            result.outputs[candidates].method = sdscatprintf(sdsempty(), "VIGENERE(key=%s)", key);
+            result.outputs[candidates].method = sdscatprintf(sdsempty(), "VIGENERE(%s)", key);
             result.outputs[candidates].fitness = fitness;
             candidates++;
         } else {

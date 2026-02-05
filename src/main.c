@@ -16,7 +16,7 @@
 
 #include "../lib/minheap/heap.h"
 
-#define PROBABILITY_THRESHOLD 0.01 f
+#define PROBABILITY_THRESHOLD 0.01f
 
 const char * argp_program_version = "ciphter v0.1";
 const char * argp_program_bug_address = "<korbin.deary45@gmail.com>";
@@ -380,8 +380,8 @@ void solve(sds input, float fitness_threshold,
 
                 // Prioritize crib matches immediately
                 if (crib && strstr(result.outputs[j].data, crib) != NULL) {
-                    saved_output -> fitness = 1.0 f; // Max priority
-                    saved_output -> cumulative_fitness += 1.0 f; // Also boost accumulator
+                    saved_output -> fitness = 1.0f; // Max priority
+                    saved_output -> cumulative_fitness += 1.0f; // Also boost accumulator
                 }
 
                 saved_output -> method = sdscatprintf(sdsempty(), "%s -> %s", current -> method, result.outputs[j].method);
@@ -454,7 +454,7 @@ int main(int argc, char * argv[]) {
     }
 
     if (strcmp(args.subcommand, "analyze") == 0) {
-        analyze(sdsnew(args.input), args.probability_threshold / 100.0 f);
+        analyze(sdsnew(args.input), args.probability_threshold / 100.0f);
     } else if (strcmp(args.subcommand, "solve") == 0) {
         // split keys by | into array
         sds raw_keys = args.keys;
@@ -475,7 +475,7 @@ int main(int argc, char * argv[]) {
             .keys = tokens
         };
 
-        solve(sdsnew(args.input), args.probability_threshold / 100.0 f, args.algorithms, args.depth, & keychain, args.crib, args.english_threshold, args.monitor_path, args.output_file, args.p_set);
+        solve(sdsnew(args.input), args.probability_threshold / 100.0f, args.algorithms, args.depth, & keychain, args.crib, args.english_threshold, args.monitor_path, args.output_file, args.p_set);
     }
 
     return 0;
