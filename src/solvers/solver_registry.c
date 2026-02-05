@@ -396,10 +396,10 @@ solver_fn(BASE) {
             continue;
         }
 
-        float penalty = ((float) base) / 36.0f;
-        float fitness = BASIC_DEFAULT_FITNESS - (penalty * PENALTY_FACTOR);
-        
         sds decimal_str = sdsfromlonglong(acc);
+
+        float penalty = ((float) base) / 36.0f;
+        float fitness = score_combined(decimal_str, sdslen(decimal_str)) - (penalty * PENALTY_FACTOR);
 
         result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
         result.outputs[candidates].data = decimal_str;
@@ -478,14 +478,11 @@ solver_fn(MORSE) {
     result.outputs = malloc(sizeof(solver_output_t));
     result.outputs[0].data = plain;
     result.outputs[0].method = sdsnew("MORSE");
-    result.outputs[0].fitness = prob * 0.9f;
+    result.outputs[0].fitness = prob;
     result.len = 1;
 
     return result;
 }
-
-
-
 
 solver_t solvers[] = {
     SOLVER(HEX, 1, 0),

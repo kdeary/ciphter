@@ -27,105 +27,54 @@ static char args_doc[] = "";
 // Program options
 static struct argp_option options[] = {
     {
-        "task",
-        't',
-        "TYPE",
-        0,
-        "Task type: A for analyze, S for solve"
+        "task", 't', "TYPE", 0, "Task type: A for analyze, S for solve"
     },
     {
-        "input",
-        'i',
-        "STRING",
-        0,
-        "Input ciphertext or filename"
+        "input", 'i', "STRING", 0, "Inline ciphertext input"
     },
     {
-        "probability",
-        'p',
-        "INT",
-        0,
-        "Probability/Fitness (Printable) threshold (0-100)"
+        "input-file", 'I', "FILE", 0, "Ciphertext input from file"
     },
     {
-        "english",
-        'E',
-        "INT",
-        0,
-        "English quality threshold (0-100) for output filtering"
+        "probability", 'p', "INT", 0, "Probability/Fitness (Printable) threshold (0-100)"
     },
     {
-        "monitor",
-        'm',
-        "STRING",
-        0,
-        "Monitor specific path substring (debug logging)"
+        "english", 'E', "INT", 0, "English quality threshold (0-100) for output filtering"
     },
     {
-        "algorithms",
-        'a',
-        "STRING",
-        0,
-        "Algorithms to use [process only]"
+        "monitor", 'm', "STRING", 0, "Monitor specific path substring (debug logging)"
     },
     {
-        "depth",
-        'd',
-        "INT",
-        0,
-        "Depth of algorithm combinations [process only]"
+        "algorithms", 'a', "STRING", 0, "Algorithms to use [process only]"
     },
     {
-        "keys",
-        'k',
-        "STRING",
-        0,
-        "Keys (raw)"
+        "depth", 'd', "INT", 0, "Depth of algorithm combinations [process only]"
     },
     {
-        "keyfile",
-        'K',
-        "FILE",
-        0,
-        "Key file"
+        "keys", 'k', "STRING", 0, "Keys (raw)"
     },
     {
-        "crib",
-        'c',
-        "STRING",
-        0,
-        "Known string to search for (filters output)"
+        "keyfile", 'K', "FILE", 0, "Key file"
     },
     {
-        "output",
-        'O',
-        "FILE",
-        0,
-        "Output file to dump results"
+        "crib", 'c', "STRING", 0, "Known string to search for (filters output)"
     },
     {
-        "silent",
-        's',
-        0,
-        0,
-        "Silent mode (hide top 5 view)"
+        "output", 'O', "FILE", 0, "Output file to dump results"
     },
     {
-        "timeout",
-        'T',
-        "INT",
-        0,
-        "Timeout in seconds for solving (default: 3)"
+        "silent", 's', 0, 0, "Silent mode (hide top 5 view)"
     },
     {
-        0
-    }
+        "timeout", 'T', "INT", 0, "Timeout in seconds for solving (default: 3)"
+    },
+    {0}
 };
 
 // Struct to hold parsed options
 struct arguments {
     char * subcommand;
-    char * input;
+    sds input;
     char * algorithms;
     int depth;
     sds keys;
@@ -153,8 +102,26 @@ static error_t parse_opt(int key, char * arg, struct argp_state * state) {
             argp_error(state, "Unknown task type: %s", arg);
         break;
     case 'i':
-        arguments -> input = arg;
+        if (arguments -> input) sdsfree(arguments -> input);
+        arguments -> input = sdsnew(arg);
         break;
+    case 'I': {
+        FILE * f = fopen(arg, "r");
+        if (f) {
+            if (arguments -> input) sdsfree(arguments -> input);
+            arguments -> input = sdsempty();
+            char buf[4096];
+            size_t nread;
+            while ((nread = fread(buf, 1, sizeof(buf), f)) > 0) {
+                arguments -> input = sdscatlen(arguments -> input, buf, nread);
+            }
+            fclose(f);
+            sdstrim(arguments -> input, " \r\n\t");
+        } else {
+            argp_error(state, "Could not open input file: %s", arg);
+        }
+        break;
+    }
     case 'p':
         arguments -> p_set = 1;
         arguments -> probability_threshold = atoi(arg);
@@ -243,9 +210,31 @@ void analyze(sds input, float probability_threshold) {
 #include <time.h>
 #include "utils.h"
 
+
+
+static void ui_log_result(FILE *f_out, int p_set, int depth, float fitness, float cumulative_fitness, 
+                         const char *label, const char *data, const char *method, 
+                         int english_threshold, float eng_score, int force_stdout) {
+    const char *fmt = "[%d][%.0f%%][Agg:%.2f]\t [%s] \"%s\" - Method: \"%s\"\n";
+    
+    if (f_out) {
+        fprintf(f_out, fmt, depth, fitness * 100, cumulative_fitness, label, data, method);
+        if (english_threshold >= 0.0f) {
+            fprintf(f_out, "\t [ENG: %.2f%%]\n", eng_score * 100);
+        }
+    }
+    
+    if (force_stdout || p_set || english_threshold >= 0.0f) {
+        printf(fmt, depth, fitness * 100, cumulative_fitness, label, data, method);
+        if (english_threshold >= 0.0f) {
+            printf("\t [ENG: %.2f%%]\n", eng_score * 100);
+        }
+    }
+}
+
 void solve(sds input, float fitness_threshold,
     const char * algorithms, int depth, keychain_t * keychain,
-    const char * crib, int english_threshold,
+    const char * crib, float english_threshold,
     const char * monitor_path, char * output_file, int p_set, int silent, int timeout) {
     sds displayed_input = sdsdup(input);
     if (sdslen(displayed_input) > 61) {
@@ -297,6 +286,17 @@ void solve(sds input, float fitness_threshold,
     heap_create( & path_heap, 0, * output_compare_fn);
     heap_insert( & path_heap, & input_res, & input_res);
 
+    solver_output_t best_res = {
+        .fitness = input_res.fitness,
+        .cumulative_fitness = input_res.cumulative_fitness,
+        .method = sdsdup(input_res.method),
+        .data = sdsdup(input_res.data),
+        .depth = input_res.depth,
+        .last_solver = input_res.last_solver
+    };
+
+    printf("[DEBUG] English Threshold: %f\n", english_threshold);
+
     while (heap_size( & path_heap) > 0) {
         // Check timeout
         if (timeout > 0 && difftime(time(NULL), start_time) >= timeout) {
@@ -315,18 +315,24 @@ void solve(sds input, float fitness_threshold,
             break;
         }
 
+        if(strstr(current -> method, "AFFINE") != NULL && strstr(current -> method, "CIPHERTEXT -> BINARY -> MORSE -> RAILFENCE (k=3, o=0) -> HEX -> BASE64") != NULL) {
+            printf("[aff2] [DEBUG] [%d]\t [Agg:%.2f] [Fit:%.2f] '%s' (%s) [%s]\n",
+                current -> depth,
+                current -> cumulative_fitness,
+                current -> fitness,
+                current -> data,
+                current -> method,
+                current -> last_solver
+            );
+        }
+
         // Prioritize crib matches
         if (crib && strstr(current -> data, crib) != NULL) {
             // Always print crib found
             // Handled by ui_log which handles the view clearing so we don't need manual line clearing logic here anymore
             
-            float display_fitness = current -> fitness;
-            float display_agg = current -> cumulative_fitness;
-
-            printf("[%d][%.0f%%][Agg:%.2f]\t [CRIB FOUND] \"%s\" - Method: \"%s\"\n",
-                current -> depth, display_fitness * 100, display_agg, current -> data, current -> method);
-            if (f_out) fprintf(f_out, "[%d][%.0f%%][Agg:%.2f]\t [CRIB FOUND] \"%s\" - Method: \"%s\"\n",
-                current -> depth, display_fitness * 100, display_agg, current -> data, current -> method);
+            ui_log_result(f_out, p_set, current -> depth, current -> fitness, current -> cumulative_fitness,
+                         "CRIB FOUND", current -> data, current -> method, -1, 0, 1);
             
             free_output(current);
             continue; // Stop recursion
@@ -342,36 +348,30 @@ void solve(sds input, float fitness_threshold,
                 current -> method);
         }
 
-        // Only print if fitness is high enough AND english threshold met (if enabled)
-        if (current -> fitness > fitness_threshold) {
-            int show = 1;
-            if (english_threshold >= 0) {
-                float eng_score = score_english_detailed(current -> data, sdslen(current -> data));
-                if (eng_score * 100 < english_threshold) {
-                    show = 0;
-                }
-            }
+        // Track best result
+        if (current -> cumulative_fitness > best_res.cumulative_fitness) {
+            free_output( & best_res);
+            best_res.fitness = current -> fitness;
+            best_res.cumulative_fitness = current -> cumulative_fitness;
+            best_res.method = sdsdup(current -> method);
+            best_res.data = sdsdup(current -> data);
+            best_res.depth = current -> depth;
+            best_res.last_solver = current -> last_solver;
+        }
 
-            if (show) {
-                if (f_out) {
-                    fprintf(f_out, "[%d][%.0f%%][Agg:%.2f]\t [OUTPUT] \"%s\" - Method: \"%s\"\n",
-                        current -> depth,
-                        current -> fitness * 100,
-                        current -> cumulative_fitness,
-                        current -> data,
-                        current -> method);
-                }
+        // Only print if fitness is high enough
 
-                if (p_set || english_threshold >= 0) {
-                    // Regular verbose output
-                    printf("[%d][%.0f%%][Agg:%.2f]\t [OUTPUT] \"%s\" - Method: \"%s\"\n",
-                        current -> depth,
-                        current -> fitness * 100,
-                        current -> cumulative_fitness,
-                        current -> data,
-                        current -> method);
-                }
-            }
+        float eng_score = 0.0f;
+        if (english_threshold >= 0.0f) {
+            eng_score = score_english_detailed(current -> data, sdslen(current -> data));
+        }
+
+        int p_set_flag = p_set && current -> fitness > fitness_threshold;
+        int eng_flag = english_threshold >= 0.0f && eng_score > english_threshold;
+
+        if (p_set_flag || eng_flag) {
+            ui_log_result(f_out, p_set, current -> depth, current -> fitness, current -> cumulative_fitness,
+                         "OUTPUT", current -> data, current -> method, english_threshold, eng_score, 0);
         }
 
         if (current -> depth >= depth) {
@@ -387,6 +387,7 @@ void solve(sds input, float fitness_threshold,
             }
 
             solver_result_t result = solver.fn(current -> data, keychain);
+
             for (size_t j = 0; j < result.len; ++j) {
                 if (strcmp(current -> data, result.outputs[j].data) == 0) {
                     continue;
@@ -406,6 +407,17 @@ void solve(sds input, float fitness_threshold,
                 saved_output -> data = sdsdup(result.outputs[j].data);
                 saved_output -> depth = current -> depth + 1;
                 saved_output -> last_solver = solver.label;
+
+                if(strstr(saved_output -> method, "AFFINE") != NULL && strstr(saved_output -> method, "CIPHERTEXT -> BINARY -> MORSE -> RAILFENCE (k=3, o=0) -> HEX -> BASE64") != NULL) {
+                    printf("[DEBUG] [%d]\t [Agg:%.2f] [Fit:%.2f] '%s' (%s) [%s]\n",
+                        saved_output -> depth,
+                        saved_output -> cumulative_fitness,
+                        saved_output -> fitness,
+                        saved_output -> data,
+                        saved_output -> method,
+                        saved_output -> last_solver
+                    );
+                }
 
                 heap_insert( & path_heap, saved_output, saved_output);
             }
@@ -435,13 +447,19 @@ void solve(sds input, float fitness_threshold,
         printf("[INFO] No high-probability solving results found.\n");
     }
     
+    // Always print the best result found so far
+    printf("\n--- Best Result (Agg:%.2f) ---\n", best_res.cumulative_fitness);
+    printf("[%d][%.0f%%]\t \"%s\"\nMethod: \"%s\"\n",
+        best_res.depth, best_res.fitness * 100, best_res.data, best_res.method);
+    printf("----------------------------------\n\n");
+    
     printf("[INFO] Solving process finished.\n");
+    free_output( & best_res);
     sdsfree(input);
 }
 
 int main(int argc, char * argv[]) {
     struct arguments args = {
-        .subcommand = NULL,
         .input = NULL,
         .algorithms = "common",
         .depth = 1,
@@ -475,7 +493,8 @@ int main(int argc, char * argv[]) {
     }
 
     if (strcmp(args.subcommand, "analyze") == 0) {
-        analyze(sdsnew(args.input), args.probability_threshold / 100.0f);
+        analyze(args.input, args.probability_threshold / 100.0f);
+        args.input = NULL; // analyze frees it
     } else if (strcmp(args.subcommand, "solve") == 0) {
         // split keys by | into array
         sds raw_keys = args.keys;
@@ -496,10 +515,15 @@ int main(int argc, char * argv[]) {
             .keys = tokens
         };
 
-        solve(sdsnew(args.input), args.probability_threshold / 100.0f, args.algorithms, args.depth, & keychain, args.crib, args.english_threshold, args.monitor_path, args.output_file, args.p_set, args.silent, args.timeout);
+        printf("[DEBUG] Probability Threshold: %f\n", args.probability_threshold / 100.0f);
+        printf("[DEBUG] English Threshold: %f\n", args.english_threshold / 100.0f);
+
+        solve(args.input, args.probability_threshold / 100.0f, args.algorithms, args.depth, & keychain, args.crib, args.english_threshold / 100.0f, args.monitor_path, args.output_file, args.p_set, args.silent, args.timeout);
+        args.input = NULL; // solve frees it
         sdsfreesplitres(tokens, count);
     }
 
+    if (args.input) sdsfree(args.input);
     sdsfree(args.keys);
     return 0;
 }
