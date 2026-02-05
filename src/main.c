@@ -111,6 +111,13 @@ static struct argp_option options[] = {
         "Silent mode (hide top 5 view)"
     },
     {
+        "timeout",
+        'T',
+        "INT",
+        0,
+        "Timeout in seconds for solving (default: 3)"
+    },
+    {
         0
     }
 };
@@ -129,6 +136,7 @@ struct arguments {
     char * output_file;
     int p_set;
     int silent;
+    int timeout;
 };
 
 // Parser function
@@ -199,6 +207,12 @@ static error_t parse_opt(int key, char * arg, struct argp_state * state) {
     case 's':
         arguments -> silent = 1;
         break;
+    case 'T':
+        arguments -> timeout = atoi(arg);
+        if (arguments -> timeout < 0) {
+            argp_error(state, "Timeout must be a non-negative integer.");
+        }
+        break;
     case ARGP_KEY_ARG:
         argp_usage(state);
         break;
@@ -223,18 +237,26 @@ void analyze(sds input, float probability_threshold) {
     if (!found) {
         printf("[INFO] No high-probability analysis results found.\n");
     }
+    sdsfree(input);
 }
 
+#include <time.h>
 #include "utils.h"
 
 void solve(sds input, float fitness_threshold,
     const char * algorithms, int depth, keychain_t * keychain,
-        const char * crib, int english_threshold,
-            const char * monitor_path, char * output_file, int p_set, int silent) {
-    
-    // ui_init(silent); REMOVED
-    printf("[INFO] Running solving on input: \"%s\"\n", input);
+    const char * crib, int english_threshold,
+    const char * monitor_path, char * output_file, int p_set, int silent, int timeout) {
+    sds displayed_input = sdsdup(input);
+    if (sdslen(displayed_input) > 61) {
+        sdsrange(displayed_input, 0, 57);
+        displayed_input = sdscat(displayed_input, "...");
+    }
+    printf("[INFO] Running solving on input: \"%s\" (Timeout: %ds)\n", displayed_input, timeout);
+    sdsfree(displayed_input);
     int found = 0;
+
+    time_t start_time = time(NULL);
 
     FILE * f_out = NULL;
     if (output_file) {
@@ -254,10 +276,6 @@ void solve(sds input, float fitness_threshold,
         if (i < solvers_count - 1) printf(", ");
     }
     printf("\n");
-
-    if (!silent) {
-        // printf("[INFO] Press SPACE to toggle/update the Top 5 Fitness View.\n"); // Removed prompt as UI is gone
-    }
 
     int lines_printed = 0;
 
@@ -280,8 +298,11 @@ void solve(sds input, float fitness_threshold,
     heap_insert( & path_heap, & input_res, & input_res);
 
     while (heap_size( & path_heap) > 0) {
-        // UI Check Input
-        // ui_check_input(); REMOVED
+        // Check timeout
+        if (timeout > 0 && difftime(time(NULL), start_time) >= timeout) {
+            printf("[INFO] Timeout reached (%ds). Stopping...\n", timeout);
+            break;
+        }
 
         // CRITICAL: Do NOT malloc here. heap_min retrieves a pointer already stored in the heap.
         // If we malloc, we leak that memory immediately when current is overwritten by heap_min.
@@ -397,23 +418,25 @@ void solve(sds input, float fitness_threshold,
             if (result.outputs) free(result.outputs);
         }
         found++;
-        free_output(current);
-        
-        // CRITICAL: input_res is on the stack. Freeing it corrupts the heap!
         if (current != &input_res) {
+            free_output(current);
             free(current);
         }
-    }
+    } // End of while loop
 
+    heap_foreach(&path_heap, free_heap_output);
     heap_destroy( & path_heap);
+    
+    free_output(&input_res);
+
     if (f_out) fclose(f_out);
-    // ui_cleanup(); REMOVED
 
     if (!found) {
         printf("[INFO] No high-probability solving results found.\n");
     }
     
     printf("[INFO] Solving process finished.\n");
+    sdsfree(input);
 }
 
 int main(int argc, char * argv[]) {
@@ -427,7 +450,8 @@ int main(int argc, char * argv[]) {
         .english_threshold = -1,
         .output_file = NULL,
         .p_set = 0,
-        .silent = 0
+        .silent = 0,
+        .timeout = 3
     };
 
     struct argp argp = {
@@ -472,8 +496,10 @@ int main(int argc, char * argv[]) {
             .keys = tokens
         };
 
-        solve(sdsnew(args.input), args.probability_threshold / 100.0f, args.algorithms, args.depth, & keychain, args.crib, args.english_threshold, args.monitor_path, args.output_file, args.p_set, args.silent);
+        solve(sdsnew(args.input), args.probability_threshold / 100.0f, args.algorithms, args.depth, & keychain, args.crib, args.english_threshold, args.monitor_path, args.output_file, args.p_set, args.silent, args.timeout);
+        sdsfreesplitres(tokens, count);
     }
 
+    sdsfree(args.keys);
     return 0;
 }

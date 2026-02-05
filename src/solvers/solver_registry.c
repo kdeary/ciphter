@@ -41,6 +41,7 @@ solver_fn(HEX) {
     result.outputs[0].method = sdsnew("HEX");
     result.outputs[0].fitness = score_combined(result.outputs[0].data, len);
 
+    free(data);
     return result;
 }
 

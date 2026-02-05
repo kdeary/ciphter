@@ -25,6 +25,7 @@ float fitness_heuristic(sds data);
 // Helpers
 void free_result(solver_result_t *result);
 void free_output(solver_output_t *output);
+void free_heap_output(void *key, void *value);
 int output_compare_fn(void *output1, void *output2);
 
 #endif // UTILS_H

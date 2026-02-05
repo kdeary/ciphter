@@ -196,6 +196,14 @@ void free_output(solver_output_t * output) {
     sdsfree(output -> data);
 }
 
+void free_heap_output(void * key, void * value) {
+    solver_output_t * output = (solver_output_t * ) value;
+    if (output) {
+        free_output(output);
+        free(output);
+    }
+}
+
 int output_compare_fn(void * output1, void * output2) {
     solver_output_t * o1 = (solver_output_t * ) output1;
     solver_output_t * o2 = (solver_output_t * ) output2;
