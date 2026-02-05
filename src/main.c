@@ -176,6 +176,8 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
 		.last_solver = NULL
 	};
 
+	int should_update_top = 1;
+
 	heap path_heap = {0};
 
 	heap_create(&path_heap, 0, *output_compare_fn);
@@ -255,7 +257,7 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
                         current->method);
                  }
                  
-                 if (p_set) {
+                 if (p_set || english_threshold >= 0) {
                     // Regular verbose output
                     printf("[%d][%.0f%%][Agg:%.2f]\t [OUTPUT] \"%s\" - Method: \"%s\"\n", 
                         current->depth, 
@@ -263,10 +265,6 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
                         current->cumulative_fitness,
                         current->data, 
                         current->method);
-                     // Live view update
-                     if (update_top_results(current)) {
-                         print_top_results(&lines_printed);
-                     }
                  }
              }
 		}
@@ -274,6 +272,13 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
 		if (current->depth >= depth) {
 			free_output(current);
 			continue;
+		}
+
+		// Always update top results candidates
+		should_update_top += 1;
+		if (should_update_top > 5) {
+			print_top_results(&lines_printed);
+			should_update_top = 0;
 		}
 		
 		for (size_t i = 0; i < solvers_count; ++i) {
