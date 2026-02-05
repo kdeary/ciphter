@@ -241,8 +241,7 @@ void solve(sds input, float fitness_threshold,
     }
     printf("\n");
 
-    // Reset top results
-    reset_top_results();
+
     int lines_printed = 0;
 
     solver_output_t input_res = {
@@ -254,7 +253,7 @@ void solve(sds input, float fitness_threshold,
         .last_solver = NULL
     };
 
-    int should_update_top = 1;
+
 
     heap path_heap = {
         0
@@ -285,10 +284,6 @@ void solve(sds input, float fitness_threshold,
 
             float display_fitness = current -> fitness;
             float display_agg = current -> cumulative_fitness;
-
-            // Update stats for potential inclusion in Top 5 / Best Result
-            // We pass 'current' AS IS (boosted) so it sorts to the #1 spot
-            update_top_results(current);
 
             printf("[%d][%.0f%%][Agg:%.2f]\t [CRIB FOUND] \"%s\" - Method: \"%s\"\n",
                 current -> depth, display_fitness * 100, display_agg, current -> data, current -> method);
@@ -354,9 +349,6 @@ void solve(sds input, float fitness_threshold,
             continue;
         }
 
-        // Always update top results candidates
-        print_top_results(&lines_printed);
-
         for (size_t i = 0; i < solvers_count; ++i) {
             solver_t solver = solvers[i];
 
@@ -395,21 +387,6 @@ void solve(sds input, float fitness_threshold,
 
     heap_destroy( & path_heap);
     if (f_out) fclose(f_out);
-
-    // If live view was active, clear it and print Top 1 final result
-    if (lines_printed > 0) {
-		printf("\033[%dA", lines_printed);
-		for (int k = 0; k < lines_printed; k++) printf("\033[K\n");
-		printf("\033[%dA", lines_printed);
-	}
-
-	printf("\n DONE");
-
-	// Print best result
-	print_top_results(&lines_printed);
-
-	// Free top results
-	free_top_results();
 
     if (!found) {
         printf("[INFO] No high-probability solving results found.\n");

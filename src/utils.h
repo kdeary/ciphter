@@ -27,11 +27,4 @@ void free_result(solver_result_t *result);
 void free_output(solver_output_t *output);
 int output_compare_fn(void *output1, void *output2);
 
-// Top 5 Helpers
-void reset_top_results();
-int update_top_results(solver_output_t *candidate);
-void print_top_results(int *lines_printed);
-solver_output_t *get_best_result();
-void free_top_results();
-
 #endif // UTILS_H
