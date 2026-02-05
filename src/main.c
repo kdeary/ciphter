@@ -15,6 +15,7 @@
 #include "english_detector.h"
 
 #include "../lib/minheap/heap.h"
+#include "ui.h"
 
 #define PROBABILITY_THRESHOLD 0.01f
 
@@ -103,6 +104,13 @@ static struct argp_option options[] = {
         "Output file to dump results"
     },
     {
+        "silent",
+        's',
+        0,
+        0,
+        "Silent mode (hide top 5 view)"
+    },
+    {
         0
     }
 };
@@ -120,6 +128,7 @@ struct arguments {
     char * monitor_path; // NULL if disabled
     char * output_file;
     int p_set;
+    int silent;
 };
 
 // Parser function
@@ -187,6 +196,9 @@ static error_t parse_opt(int key, char * arg, struct argp_state * state) {
     case 'O':
         arguments -> output_file = arg;
         break;
+    case 's':
+        arguments -> silent = 1;
+        break;
     case ARGP_KEY_ARG:
         argp_usage(state);
         break;
@@ -218,15 +230,17 @@ void analyze(sds input, float probability_threshold) {
 void solve(sds input, float fitness_threshold,
     const char * algorithms, int depth, keychain_t * keychain,
         const char * crib, int english_threshold,
-            const char * monitor_path, char * output_file, int p_set) {
-    printf("[INFO] Running solving on input: \"%s\"\n", input);
+            const char * monitor_path, char * output_file, int p_set, int silent) {
+    
+    ui_init(silent);
+    ui_log("[INFO] Running solving on input: \"%s\"\n", input);
     int found = 0;
 
     FILE * f_out = NULL;
     if (output_file) {
         f_out = fopen(output_file, "w");
         if (!f_out) {
-            printf("[ERROR] Could not open output file: %s\n", output_file);
+            ui_log("[ERROR] Could not open output file: %s\n", output_file);
         }
     }
 
@@ -234,13 +248,16 @@ void solve(sds input, float fitness_threshold,
     size_t solvers_count = 0;
     solver_t * solvers = get_solvers(algorithms, & solvers_count);
 
-    printf("[INFO] Loaded %zu algorithms: ", solvers_count);
+    ui_log("[INFO] Loaded %zu algorithms: ", solvers_count);
     for (size_t i = 0; i < solvers_count; ++i) {
-        printf("%s", solvers[i].label);
-        if (i < solvers_count - 1) printf(", ");
+        ui_log("%s", solvers[i].label);
+        if (i < solvers_count - 1) ui_log(", ");
     }
-    printf("\n");
+    ui_log("\n");
 
+    if (!silent) {
+        ui_log("[INFO] Press SPACE to toggle/update the Top 5 Fitness View.\n");
+    }
 
     int lines_printed = 0;
 
@@ -263,6 +280,9 @@ void solve(sds input, float fitness_threshold,
     heap_insert( & path_heap, & input_res, & input_res);
 
     while (heap_size( & path_heap) > 0) {
+        // UI Check Input
+        ui_check_input();
+
         solver_output_t * current = malloc(sizeof(solver_output_t));
         int status = heap_min( & path_heap, (void ** )( & current), (void ** )( & current));
         heap_delmin( & path_heap, (void ** )( & current), (void ** )( & current));
@@ -272,39 +292,29 @@ void solve(sds input, float fitness_threshold,
             break;
         }
 
+        // Update Top 5
+        ui_update_top5(current->fitness, current->cumulative_fitness, current->data, current->method, current->depth);
+
         // Prioritize crib matches
         if (crib && strstr(current -> data, crib) != NULL) {
             // Always print crib found
-            if (!p_set && lines_printed > 0) {
-                printf("\033[%dA", lines_printed); // Clear live view to print this permanent msg
-                for (int k = 0; k < lines_printed; k++) printf("\033[K\n");
-                printf("\033[%dA", lines_printed);
-            }
-            lines_printed = 0; // Reset because we cleared/overwrote
-
+            // Handled by ui_log which handles the view clearing so we don't need manual line clearing logic here anymore
+            
             float display_fitness = current -> fitness;
             float display_agg = current -> cumulative_fitness;
 
-            printf("[%d][%.0f%%][Agg:%.2f]\t [CRIB FOUND] \"%s\" - Method: \"%s\"\n",
+            ui_log("[%d][%.0f%%][Agg:%.2f]\t [CRIB FOUND] \"%s\" - Method: \"%s\"\n",
                 current -> depth, display_fitness * 100, display_agg, current -> data, current -> method);
             if (f_out) fprintf(f_out, "[%d][%.0f%%][Agg:%.2f]\t [CRIB FOUND] \"%s\" - Method: \"%s\"\n",
                 current -> depth, display_fitness * 100, display_agg, current -> data, current -> method);
-
-            // No longer setting -1.0f as we want it valid for Top 5. Recursion stopped by continue.
+            
             free_output(current);
             continue; // Stop recursion
         }
 
         // Monitor logs
         if (monitor_path && strstr(current -> method, monitor_path) != NULL) {
-            if (!p_set && lines_printed > 0) {
-                printf("\033[%dA", lines_printed);
-                for (int k = 0; k < lines_printed; k++) printf("\033[K\n");
-                printf("\033[%dA", lines_printed);
-                lines_printed = 0;
-            }
-
-            printf("[MONITOR] [%d]\t [Agg:%.2f] [Fit:%.2f] \"%s\" - Method: \"%s\"\n",
+            ui_log("[MONITOR] [%d]\t [Agg:%.2f] [Fit:%.2f] \"%s\" - Method: \"%s\"\n",
                 current -> depth,
                 current -> cumulative_fitness,
                 current -> fitness,
@@ -334,7 +344,7 @@ void solve(sds input, float fitness_threshold,
 
                 if (p_set || english_threshold >= 0) {
                     // Regular verbose output
-                    printf("[%d][%.0f%%][Agg:%.2f]\t [OUTPUT] \"%s\" - Method: \"%s\"\n",
+                    ui_log("[%d][%.0f%%][Agg:%.2f]\t [OUTPUT] \"%s\" - Method: \"%s\"\n",
                         current -> depth,
                         current -> fitness * 100,
                         current -> cumulative_fitness,
@@ -387,10 +397,13 @@ void solve(sds input, float fitness_threshold,
 
     heap_destroy( & path_heap);
     if (f_out) fclose(f_out);
+    ui_cleanup();
 
     if (!found) {
-        printf("[INFO] No high-probability solving results found.\n");
+        ui_log("[INFO] No high-probability solving results found.\n");
     }
+    
+    ui_log("[INFO] Solving process finished.\n");
 }
 
 int main(int argc, char * argv[]) {
@@ -403,7 +416,8 @@ int main(int argc, char * argv[]) {
         .probability_threshold = (int)(PROBABILITY_THRESHOLD * 100),
         .english_threshold = -1,
         .output_file = NULL,
-        .p_set = 0
+        .p_set = 0,
+        .silent = 0
     };
 
     struct argp argp = {
@@ -448,7 +462,7 @@ int main(int argc, char * argv[]) {
             .keys = tokens
         };
 
-        solve(sdsnew(args.input), args.probability_threshold / 100.0f, args.algorithms, args.depth, & keychain, args.crib, args.english_threshold, args.monitor_path, args.output_file, args.p_set);
+        solve(sdsnew(args.input), args.probability_threshold / 100.0f, args.algorithms, args.depth, & keychain, args.crib, args.english_threshold, args.monitor_path, args.output_file, args.p_set, args.silent);
     }
 
     return 0;
