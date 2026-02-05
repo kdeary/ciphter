@@ -25,8 +25,10 @@ static struct argp_option options[] = {
     { "monitor", 'm', "STRING", 0, "Monitor specific path substring (debug logging)" },
 	{ "algorithms", 'a', "STRING", 0, "Algorithms to use [process only]" },
 	{ "depth", 'd', "INT", 0, "Depth of algorithm combinations [process only]" },
-	{ "keys", 'k', "STRING", 0, "Keys or key file [process only]" },
+	{ "keys", 'k', "STRING", 0, "Keys (raw)" },
+	{ "keyfile", 'K', "FILE", 0, "Key file" },
     { "crib", 'c', "STRING", 0, "Known string to search for (filters output)" },
+	{ "output", 'O', "FILE", 0, "Output file to dump results" },
 	{ 0 }
 };
 
@@ -36,11 +38,13 @@ struct arguments {
     char *input;
     char *algorithms;
     int depth;
-    char *keys;
+    sds keys;
     char *crib;
     int probability_threshold;
     int english_threshold; // -1 if disabled
     char *monitor_path; // NULL if disabled
+    char *output_file;
+    int p_set;
 };
 
 // Parser function
@@ -60,6 +64,7 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
         arguments->input = arg;
         break;
     case 'p':
+        arguments->p_set = 1;
         arguments->probability_threshold = atoi(arg);
         if (arguments->probability_threshold < 0 || arguments->probability_threshold > 100) {
             argp_error(state, "Probability threshold must be between 0 and 100.");
@@ -81,10 +86,31 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
         arguments->depth = atoi(arg);
         break;
     case 'k':
-        arguments->keys = arg;
+        arguments->keys = sdscat(arguments->keys, arg);
+        arguments->keys = sdscat(arguments->keys, "|");
         break;
+    case 'K': {
+        FILE *f = fopen(arg, "r");
+        if (f) {
+            char line[1024];
+            while (fgets(line, sizeof(line), f)) {
+                line[strcspn(line, "\r\n")] = 0; // Strip newline
+                if (strlen(line) > 0) {
+                    arguments->keys = sdscat(arguments->keys, line);
+                    arguments->keys = sdscat(arguments->keys, "|");
+                }
+            }
+            fclose(f);
+        } else {
+            argp_error(state, "Could not open key file: %s", arg);
+        }
+        break;
+    }
     case 'c':
         arguments->crib = arg;
+        break;
+    case 'O':
+        arguments->output_file = arg;
         break;
     case ARGP_KEY_ARG:
         argp_usage(state);
@@ -113,49 +139,34 @@ void analyze(sds input, float probability_threshold) {
 	}
 }
 
-typedef struct {
-	int len;
-	solver_output_t *results;
-} path_container_t;
+#include "utils.h"
 
-void free_result(solver_result_t *result) {
-	for (size_t j = 0; j < result->len; ++j) {
-		sdsfree(result->outputs[j].method);
-		sdsfree(result->outputs[j].data);
-	}
-
-	free(result->outputs);
-	result->outputs = NULL;
-}
-
-void free_output(solver_output_t *output) {
-	sdsfree(output->method);
-	sdsfree(output->data);
-}
-
-int output_compare_fn(void *output1, void *output2) {
-	solver_output_t *o1 = (solver_output_t *)output1;
-	solver_output_t *o2 = (solver_output_t *)output2;
-    
-    // Normalize by depth to prevent Depth-First Search behavior from dominating
-    // We use a gentle penalty so deep, high-quality paths still win, 
-    // but deep junk paths don't beat shallow paths.
-    // Using sqrt(depth) as divisor dampens the sum effect.
-    float score1 = o1->cumulative_fitness / (o1->depth + 1.0f);
-    float score2 = o2->cumulative_fitness / (o2->depth + 1.0f);
-
-	if (score1 > score2) return -1; // o1 is "smaller" (top of heap/best)
-	if (score1 < score2) return 1;
-	return 0;
-}
-
-void solve(sds input, float fitness_threshold, const char *algorithms, int depth, keychain_t *keychain, const char *crib, int english_threshold, const char *monitor_path) {
+void solve(sds input, float fitness_threshold, const char *algorithms, int depth, keychain_t *keychain, const char *crib, int english_threshold, const char *monitor_path, char *output_file, int p_set) {
 	printf("[INFO] Running solving on input: \"%s\"\n", input);
 	int found = 0;
+
+    FILE *f_out = NULL;
+    if (output_file) {
+        f_out = fopen(output_file, "w");
+        if (!f_out) {
+             printf("[ERROR] Could not open output file: %s\n", output_file);
+        }
+    }
 
 	// Parse algorithm string or use default
 	size_t solvers_count = 0;
 	solver_t *solvers = get_solvers(algorithms, &solvers_count);
+
+	printf("[INFO] Loaded %zu algorithms: ", solvers_count);
+	for (size_t i = 0; i < solvers_count; ++i) {
+		printf("%s", solvers[i].label);
+		if (i < solvers_count - 1) printf(", ");
+	}
+	printf("\n");
+    
+    // Reset top results
+    reset_top_results();
+    int lines_printed = 0;
 
 	solver_output_t input_res = {
 		.fitness = 1,
@@ -183,14 +194,40 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
 
 		// Prioritize crib matches
 		if (crib && strstr(current->data, crib) != NULL) {
-            current->fitness = -1.0f;
-			printf("[CRIB FOUND] \"%s\" - Method: \"%s\"\n", current->data, current->method);
+            // Always print crib found
+            if (!p_set && lines_printed > 0) {
+                printf("\033[%dA", lines_printed); // Clear live view to print this permanent msg
+                for(int k=0; k<lines_printed; k++) printf("\033[K\n");
+                printf("\033[%dA", lines_printed);
+            }
+            lines_printed = 0; // Reset because we cleared/overwrote
+            
+            float display_fitness = current->fitness;
+            float display_agg = current->cumulative_fitness;
+
+            // Update stats for potential inclusion in Top 5 / Best Result
+            // We pass 'current' AS IS (boosted) so it sorts to the #1 spot
+            update_top_results(current);
+
+			printf("[%d][%.0f%%][Agg:%.2f]\t [CRIB FOUND] \"%s\" - Method: \"%s\"\n", 
+                current->depth, display_fitness * 100, display_agg, current->data, current->method);
+            if (f_out) fprintf(f_out, "[%d][%.0f%%][Agg:%.2f]\t [CRIB FOUND] \"%s\" - Method: \"%s\"\n", 
+                current->depth, display_fitness * 100, display_agg, current->data, current->method);
+            
+            // No longer setting -1.0f as we want it valid for Top 5. Recursion stopped by continue.
 			free_output(current);
 			continue; // Stop recursion
 		}
 
-        // Monitor logs - Check BEFORE filtering
+        // Monitor logs
         if (monitor_path && strstr(current->method, monitor_path) != NULL) {
+             if (!p_set && lines_printed > 0) {
+                 printf("\033[%dA", lines_printed);
+                 for(int k=0; k<lines_printed; k++) printf("\033[K\n");
+                 printf("\033[%dA", lines_printed);
+                 lines_printed = 0;
+             }
+             
              printf("[MONITOR] [%d]\t [Agg:%.2f] [Fit:%.2f] \"%s\" - Method: \"%s\"\n", 
                 current->depth, 
                 current->cumulative_fitness,
@@ -199,9 +236,8 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
                 current->method);
         }
 
-		// Only print if no crib was provided and fitness is high enough
-        // AND english threshold met (if enabled)
-		if (!crib && current->fitness > fitness_threshold) {
+		// Only print if fitness is high enough AND english threshold met (if enabled)
+		if (current->fitness > fitness_threshold) {
              int show = 1;
              if (english_threshold >= 0) {
                  float eng_score = score_english_detailed(current->data, sdslen(current->data));
@@ -211,12 +247,28 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
              }
              
              if (show) {
-			    printf("[%d][%.0f%%][Agg:%.2f]\t [OUTPUT] \"%s\" - Method: \"%s\"\n", 
-                    current->depth, 
-                    current->fitness * 100, 
-                    current->cumulative_fitness,
-                    current->data, 
-                    current->method);
+                 if (f_out) {
+                     fprintf(f_out, "[%d][%.0f%%][Agg:%.2f]\t [OUTPUT] \"%s\" - Method: \"%s\"\n", 
+                        current->depth, 
+                        current->fitness * 100, 
+                        current->cumulative_fitness,
+                        current->data, 
+                        current->method);
+                 }
+                 
+                 if (p_set) {
+                    // Regular verbose output
+                    printf("[%d][%.0f%%][Agg:%.2f]\t [OUTPUT] \"%s\" - Method: \"%s\"\n", 
+                        current->depth, 
+                        current->fitness * 100, 
+                        current->cumulative_fitness,
+                        current->data, 
+                        current->method);
+                 } else {
+                     // Live view update
+                     update_top_results(current);
+                     print_top_results(&lines_printed);
+                 }
              }
 		}
 
@@ -234,8 +286,7 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
 
 			solver_result_t result = solver.fn(current->data, keychain);
 			for (size_t j = 0; j < result.len; ++j) {
-				// printf("[%.0f%%]\t [%s] %s\n", result.outputs[j].fitness * 100, solver.label, result.outputs[j].data);
-				if (result.outputs[j].fitness < MINIMUM_WORKING_FITNESS || strcmp(current->data, result.outputs[j].data) == 0) {
+				if (strcmp(current->data, result.outputs[j].data) == 0) {
 					continue;
 				}
 
@@ -245,8 +296,8 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
 				
 				// Prioritize crib matches immediately
 				if (crib && strstr(result.outputs[j].data, crib) != NULL) {
-					saved_output->fitness = 10000.0f; // Max priority
-                    saved_output->cumulative_fitness += 10000.0f; // Also boost accumulator
+					saved_output->fitness = 1.0f; // Max priority
+                    saved_output->cumulative_fitness += 1.0f; // Also boost accumulator
 				}
 
 				saved_output->method = sdscatprintf(sdsempty(), "%s -> %s", current->method, result.outputs[j].method);
@@ -262,10 +313,27 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
 		free_output(current);
 	}
 
-heap_destroy(&path_heap);
-if (!found) {
-    printf("[INFO] No high-probability solving results found.\n");
-}
+    heap_destroy(&path_heap);
+    if (f_out) fclose(f_out);
+    
+    // If live view was active, clear it and print Top 1 final result
+    if (!p_set) {
+         if (lines_printed > 0) {
+             printf("\033[%dA", lines_printed);
+             for(int k=0; k<lines_printed; k++) printf("\033[K\n");
+             printf("\033[%dA", lines_printed);
+         }
+         
+         // Print best result
+         print_top_results(&lines_printed);
+         
+         // Free top results
+         free_top_results();
+    }
+
+    if (!found) {
+        printf("[INFO] No high-probability solving results found.\n");
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -274,9 +342,11 @@ int main(int argc, char *argv[]) {
 		.input = NULL,
 		.algorithms = "common",
 		.depth = 1,
-		.keys = "",
+		.keys = sdsnew(""),
 		.probability_threshold = (int)(PROBABILITY_THRESHOLD * 100),
-        .english_threshold = -1
+        .english_threshold = -1,
+        .output_file = NULL,
+        .p_set = 0
 	};
 
 	struct argp argp = { options, parse_opt, args_doc, doc };
@@ -298,11 +368,10 @@ int main(int argc, char *argv[]) {
 		analyze(sdsnew(args.input), args.probability_threshold / 100.0f);
 	} else if (strcmp(args.subcommand, "solve") == 0) {
 		// split keys by | into array
-		sds raw_keys = sdsnew(args.keys);
+		sds raw_keys = args.keys;
 		int count = 0;
 		sds *tokens = sdssplitlen(raw_keys, sdslen(raw_keys), "|", 1, &count);
 
-		printf("[DEBUG] Processing input: %s\n", args.input);
 		printf("[DEBUG] Algorithms: %s\n", args.algorithms);
 		printf("[DEBUG] Depth: %d\n", args.depth);
 
@@ -317,7 +386,7 @@ int main(int argc, char *argv[]) {
 			.keys = tokens
 		};
 		
-		solve(sdsnew(args.input), args.probability_threshold / 100.0f, args.algorithms, args.depth, &keychain, args.crib, args.english_threshold, args.monitor_path);
+		solve(sdsnew(args.input), args.probability_threshold / 100.0f, args.algorithms, args.depth, &keychain, args.crib, args.english_threshold, args.monitor_path, args.output_file, args.p_set);
 	}
 
 	return 0;

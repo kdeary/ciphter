@@ -116,7 +116,7 @@ solver_fn(AFFINE) {
 			if (!plain) continue;
 
 			sds decrypted = sdsnew(plain);
-			float fitness = fitness_heuristic(decrypted) * 0.75f;
+			float fitness = fitness_heuristic(decrypted);
 			free(plain);
 
 			// Heuristic: Penalize complex keys.
@@ -126,7 +126,7 @@ solver_fn(AFFINE) {
                 // User requested priority: a=1 (all b), then a=higher.
                 // Since max b=25, weighting a by 30 ensures a dominates b.
 				float penalty = ((float)a * 30.0f + (float)b) / 2000.0f; 
-				fitness = (fitness * 0.75f) - (penalty * 0.01f);
+				fitness = fitness - (penalty * 0.01f);
 				if (fitness < 0) fitness = 0.001f; // Don't allow negative or zero if it was valid
 			} else {
                 fitness = 0.0f;
@@ -201,13 +201,74 @@ solver_fn(OCTAL) {
 }
 
 // Ordered by popularity/commonness
+
+static solver_result_t solve_VIGENERE(sds input, keychain_t *keychain) {
+	solver_result_t result = {
+		.len = 0,
+		.outputs = NULL,
+	};
+    
+    if (keychain == NULL || keychain->len == 0) return result;
+
+    int candidates = 0;
+    int input_len = sdslen(input);
+    
+    // Vigenere requires alpha only? Or we skip non-alpha.
+    // Standard implementation: skip non-alpha in plaintext, rotate by key.
+    // Decryption: P = (C - K + 26) % 26
+    
+    for (int k = 0; k < keychain->len; k++) {
+        sds key = keychain->keys[k];
+        int key_len = sdslen(key);
+        if (key_len == 0) continue;
+        
+        sds output = sdsdup(input);
+        int key_idx = 0;
+        
+        for (int i = 0; i < input_len; i++) {
+            if (isalpha(output[i])) {
+                char base = isupper(output[i]) ? 'A' : 'a';
+                
+                char k_char = key[key_idx % key_len];
+                int shift = 0;
+                if (isupper(k_char)) shift = k_char - 'A';
+                else if (islower(k_char)) shift = k_char - 'a';
+                
+                // Decrypt: (C - base - shift + 26) % 26 + base
+                int c_val = output[i] - base;
+                int p_val = (c_val - shift + 26) % 26;
+                output[i] = p_val + base;
+                
+                key_idx++;
+            }
+        }
+        
+        float fitness = fitness_english_freq(output);
+        
+        if (fitness > 0.05f) {
+           result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
+           result.outputs[candidates].data = output;
+           result.outputs[candidates].method = sdscatprintf(sdsempty(), "VIGENERE(key=%s)", key);
+           result.outputs[candidates].fitness = fitness;
+           candidates++;
+        } else {
+            sdsfree(output);
+        }
+    }
+    
+    result.len = candidates;
+    return result;
+}
 solver_t solvers[] = {
 	SOLVER(HEX, 1, 0),
 	SOLVER(BASE64, 1, 0),
     SOLVER(BINARY, 0.75, 0),
     SOLVER(OCTAL, 0.75, 0),
 	SOLVER(AFFINE, 0.5, 1),
+	SOLVER(VIGENERE, 0.5, 1),
 };
+
+
 
 size_t solvers_count = sizeof(solvers) / sizeof(solver_t);
 
