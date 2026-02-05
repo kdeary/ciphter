@@ -282,7 +282,7 @@ float get_score(solver_output_t *o) {
     return o->cumulative_fitness / (o->depth + 1.0f);
 }
 
-void update_top_results(solver_output_t *candidate) {
+int update_top_results(solver_output_t *candidate) {
     float score = get_score(candidate);
     int insert_idx = -1;
     
@@ -307,7 +307,9 @@ void update_top_results(solver_output_t *candidate) {
             top_results[j] = top_results[j-1];
         }
         top_results[insert_idx] = clone_output(candidate);
+        return 1; // Changed
     }
+    return 0; // Not changed
 }
 
 void print_top_results(int *lines_printed) {

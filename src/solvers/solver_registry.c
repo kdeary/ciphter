@@ -249,9 +249,6 @@ static solver_result_t solve_VIGENERE(sds input, keychain_t *keychain) {
         }
         
         float fitness = fitness_english_freq(output);
-        
-
-
         if (fitness > VIGENERE_THRESHOLD) {
            result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
            result.outputs[candidates].data = output;
@@ -266,6 +263,7 @@ static solver_result_t solve_VIGENERE(sds input, keychain_t *keychain) {
     result.len = candidates;
     return result;
 }
+
 solver_t solvers[] = {
 	SOLVER(HEX, 1, 0),
 	SOLVER(BASE64, 1, 0),
@@ -274,8 +272,6 @@ solver_t solvers[] = {
 	SOLVER(AFFINE, 0.5, 1),
 	SOLVER(VIGENERE, 0.5, 1),
 };
-
-
 
 size_t solvers_count = sizeof(solvers) / sizeof(solver_t);
 

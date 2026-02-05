@@ -12,8 +12,6 @@
 #define PRINTABLE_PENALTY_POWER 0.5f
 #define ENGLISH_FREQ_POWER 8.0f
 
-
-
 // Converters
 int hex_char_to_int(char c);
 unsigned char *hex_to_bytes(const char *hex, int *out_len);
@@ -32,7 +30,7 @@ int output_compare_fn(void *output1, void *output2);
 
 // Top 5 Helpers
 void reset_top_results();
-void update_top_results(solver_output_t *candidate);
+int update_top_results(solver_output_t *candidate);
 void print_top_results(int *lines_printed);
 solver_output_t *get_best_result();
 void free_top_results();

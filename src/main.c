@@ -263,10 +263,10 @@ void solve(sds input, float fitness_threshold, const char *algorithms, int depth
                         current->cumulative_fitness,
                         current->data, 
                         current->method);
-                 } else {
                      // Live view update
-                     update_top_results(current);
-                     print_top_results(&lines_printed);
+                     if (update_top_results(current)) {
+                         print_top_results(&lines_printed);
+                     }
                  }
              }
 		}
