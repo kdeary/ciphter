@@ -21,38 +21,6 @@
 static unsigned char decoding_table[256];
 static int table_built = 0;
 
-// English letter frequencies (normalized to sum to 1.0)
-// Source: https://en.wikipedia.org/wiki/Letter_frequency
-static
-const float english_freq[26] = {
-    0.08167, // A
-    0.01492, // B
-    0.02782, // C
-    0.04253, // D
-    0.12702, // E
-    0.02228, // F
-    0.02015, // G
-    0.06094, // H
-    0.06966, // I
-    0.00153, // J
-    0.00772, // K
-    0.04025, // L
-    0.02406, // M
-    0.06749, // N
-    0.07507, // O
-    0.01929, // P
-    0.00095, // Q
-    0.05987, // R
-    0.06327, // S
-    0.09056, // T
-    0.02758, // U
-    0.00978, // V
-    0.02360, // W
-    0.00150, // X
-    0.01974, // Y
-    0.00074 // Z
-};
-
 // ==========================================
 // Helper Implementations (from utils.h)
 // ==========================================
@@ -62,40 +30,6 @@ int hex_char_to_int(char c) {
     if ('a' <= c && c <= 'f') return 10 + (c - 'a');
     if ('A' <= c && c <= 'F') return 10 + (c - 'A');
     return -1;
-}
-
-float fitness_english_freq(sds data) {
-    int len = sdslen(data);
-    if (len == 0) return 0.0f;
-
-    int letter_counts[26] = {
-        0
-    };
-    int total_letters = 0;
-
-    for (int i = 0; i < len; i++) {
-        if (isalpha(data[i])) {
-            char ch = tolower(data[i]);
-            letter_counts[ch - 'a']++;
-            total_letters++;
-        }
-    }
-
-    if (total_letters == 0) return 0.0f;
-
-    // Calculate chi-squared score
-    float score = 0.0f;
-    for (int i = 0; i < 26; i++) {
-        float observed = (float) letter_counts[i];
-        float expected = english_freq[i] * total_letters;
-        if (expected > 0.0f) {
-            float diff = observed - expected;
-            score += (diff * diff) / expected;
-        }
-    }
-
-    // Lower chi-squared score means better match; invert it to match higher-is-better pattern
-    return 1.0f / (1.0f + score);
 }
 
 float fitness_heuristic(sds data) {
@@ -325,19 +259,18 @@ int update_top_results(solver_output_t * candidate) {
 }
 
 void print_top_results(int * lines_printed) {
-    if ( * lines_printed > 0) {
-        // Move cursor up
-        printf("\033[%dA", * lines_printed);
-    }
+    // if ( * lines_printed > 0) {
+    //     // Move cursor up
+    //     printf("\033[%dA", * lines_printed);
+    // }
 
     int count = 0;
     for (int i = TOP_N - 1; i >= 0; i--) {
+        
         if (top_results[i]) {
+            printf("\n test");
             float display_fitness = top_results[i] -> fitness;
             float display_agg = top_results[i] -> cumulative_fitness;
-
-            if (display_fitness > 5000.0f) display_fitness -= 10000.0f;
-            if (display_agg > 5000.0f) display_agg -= 10000.0f;
 
             printf("\033[K"); // Clear line
             printf("[%d][%.0f%%][Agg:%.2f]\t [OUTPUT] \"%.20s...\" - Method: \"%s\"\n",

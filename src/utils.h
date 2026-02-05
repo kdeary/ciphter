@@ -20,7 +20,6 @@ unsigned char *octal_to_bytes(const char *oct, int *out_len);
 unsigned char *base64_decode(const char *data, size_t input_len, size_t *output_len);
 
 // Fitness / Scoring
-float fitness_english_freq(sds data);
 float fitness_heuristic(sds data);
 
 // Helpers

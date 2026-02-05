@@ -355,11 +355,7 @@ void solve(sds input, float fitness_threshold,
         }
 
         // Always update top results candidates
-        should_update_top += 1;
-        if (should_update_top > 5) {
-            print_top_results( & lines_printed);
-            should_update_top = 0;
-        }
+        print_top_results(&lines_printed);
 
         for (size_t i = 0; i < solvers_count; ++i) {
             solver_t solver = solvers[i];
@@ -401,19 +397,19 @@ void solve(sds input, float fitness_threshold,
     if (f_out) fclose(f_out);
 
     // If live view was active, clear it and print Top 1 final result
-    if (!p_set) {
-        if (lines_printed > 0) {
-            printf("\033[%dA", lines_printed);
-            for (int k = 0; k < lines_printed; k++) printf("\033[K\n");
-            printf("\033[%dA", lines_printed);
-        }
+    if (lines_printed > 0) {
+		printf("\033[%dA", lines_printed);
+		for (int k = 0; k < lines_printed; k++) printf("\033[K\n");
+		printf("\033[%dA", lines_printed);
+	}
 
-        // Print best result
-        print_top_results( & lines_printed);
+	printf("\n DONE");
 
-        // Free top results
-        free_top_results();
-    }
+	// Print best result
+	print_top_results(&lines_printed);
+
+	// Free top results
+	free_top_results();
 
     if (!found) {
         printf("[INFO] No high-probability solving results found.\n");

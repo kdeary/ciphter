@@ -19,6 +19,8 @@
 #define VIGENERE_THRESHOLD 0.01f
 #define AFFINE_A_WEIGHT 30.0f
 #define AFFINE_DIVISOR 2000.0f
+// Affine fitness has a lower base score because its outputs always have only printable characters
+#define BASE_AFFINE_FITNESS 0.75f
 
 // hex string to bytes
 solver_fn(HEX) {
@@ -38,7 +40,6 @@ solver_fn(HEX) {
     result.outputs[0].data = sdsnewlen(data, len);
     result.outputs[0].method = sdsnew("HEX");
     result.outputs[0].fitness = score_combined(result.outputs[0].data, len);
-    // Removed length penalty
 
     return result;
 }
@@ -118,28 +119,15 @@ solver_fn(AFFINE) {
     int candidates = 0;
 
     for (int a = 1; a < ALPHABET_SIZE; a++) {
-        // if (!is_coprime(a, ALPHABET_SIZE)) continue;
-
         for (int b = 0; b < ALPHABET_SIZE; b++) {
             sds plain = affine_decrypt(input, a, b);
             if (!plain) continue;
 
             sds decrypted = sdsnew(plain);
-            float fitness = fitness_heuristic(decrypted);
             free(plain);
 
-            // Heuristic: Penalize complex keys.
-            // Start with base fitness, then subtract a tiny amount based on 'a' and 'b'.
-            // This ensures "a=1 b=0" (simpler) > "a=3 b=10" (complex) given equal valid English output.
-            if (fitness > 0) {
-                // User requested priority: a=1 (all b), then a=higher.
-                // Since max b=25, weighting a by 30 ensures a dominates b.
-                float penalty = ((float) a * AFFINE_A_WEIGHT + (float) b) / AFFINE_DIVISOR;
-                fitness = fitness - (penalty * 0.01f);
-                if (fitness < 0) fitness = 0.001f; // Don't allow negative or zero if it was valid
-            } else {
-                fitness = 0.0f;
-            }
+            float penalty = ((float) a * AFFINE_A_WEIGHT + (float) b) / AFFINE_DIVISOR;
+            float fitness = BASE_AFFINE_FITNESS - (penalty * 0.01f);
 
             result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
             result.outputs[candidates].data = decrypted;
@@ -247,7 +235,7 @@ static solver_result_t solve_VIGENERE(sds input, keychain_t * keychain) {
             }
         }
 
-        float fitness = fitness_english_freq(output);
+        float fitness = fitness_heuristic(output);
         if (fitness > VIGENERE_THRESHOLD) {
             result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
             result.outputs[candidates].data = output;
