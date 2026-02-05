@@ -17,10 +17,10 @@
 
 // Solver Constants
 #define VIGENERE_THRESHOLD 0.01f
-#define AFFINE_A_WEIGHT 30.0f
-#define AFFINE_DIVISOR 2000.0f
-// Affine fitness has a lower base score because its outputs always have only printable characters
-#define BASE_AFFINE_FITNESS 0.75f
+
+// Affine, Railfence, Vigenere fitness have lower base scores because its outputs always have only printable characters
+#define BASIC_DEFAULT_FITNESS 0.75f
+#define PENALTY_FACTOR 0.01f
 
 // hex string to bytes
 solver_fn(HEX) {
@@ -69,6 +69,58 @@ solver_fn(BASE64) {
     result.outputs[0].fitness = score_combined(result.outputs[0].data, out_len);
 
     free(decoded);
+    return result;
+}
+
+solver_fn(BINARY) {
+    int len = 0;
+    unsigned char * data = binary_to_bytes(input, & len);
+
+    solver_result_t result = {
+        .len = 0,
+        .outputs = NULL,
+    };
+
+    if (!data) return result;
+    if (len == 0) {
+        free(data);
+        return result;
+    }
+
+    result.outputs = malloc(sizeof(solver_output_t));
+    result.len = 1;
+
+    result.outputs[0].data = sdsnewlen(data, len);
+    result.outputs[0].method = sdsnew("BINARY");
+    result.outputs[0].fitness = score_combined(result.outputs[0].data, len);
+
+    free(data);
+    return result;
+}
+
+solver_fn(OCTAL) {
+    int len = 0;
+    unsigned char * data = octal_to_bytes(input, & len);
+
+    solver_result_t result = {
+        .len = 0,
+        .outputs = NULL,
+    };
+
+    if (!data) return result;
+    if (len == 0) {
+        free(data);
+        return result;
+    }
+
+    result.outputs = malloc(sizeof(solver_output_t));
+    result.len = 1;
+
+    result.outputs[0].data = sdsnewlen(data, len);
+    result.outputs[0].method = sdsnew("OCTAL");
+    result.outputs[0].fitness = score_combined(result.outputs[0].data, len);
+
+    free(data);
     return result;
 }
 
@@ -126,8 +178,8 @@ solver_fn(AFFINE) {
             sds decrypted = sdsnew(plain);
             free(plain);
 
-            float penalty = ((float) a * AFFINE_A_WEIGHT + (float) b) / AFFINE_DIVISOR;
-            float fitness = BASE_AFFINE_FITNESS - (penalty * 0.01f);
+            float penalty = ((float) a * ALPHABET_SIZE + (float) b) / (ALPHABET_SIZE * ALPHABET_SIZE);
+            float fitness = BASIC_DEFAULT_FITNESS - (penalty * PENALTY_FACTOR);
 
             result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
             result.outputs[candidates].data = decrypted;
@@ -138,59 +190,6 @@ solver_fn(AFFINE) {
     }
 
     result.len = candidates;
-    return result;
-}
-
-solver_fn(BINARY) {
-    int len = 0;
-    unsigned char * data = binary_to_bytes(input, & len);
-
-    solver_result_t result = {
-        .len = 0,
-        .outputs = NULL,
-    };
-
-    if (!data) return result;
-    if (len == 0) {
-        free(data);
-        return result;
-    }
-
-    result.outputs = malloc(sizeof(solver_output_t));
-    result.len = 1;
-
-    result.outputs[0].data = sdsnewlen(data, len);
-    result.outputs[0].method = sdsnew("BINARY");
-    result.outputs[0].fitness = score_combined(result.outputs[0].data, len);
-    // Removed length penalty
-
-    free(data);
-    return result;
-}
-
-solver_fn(OCTAL) {
-    int len = 0;
-    unsigned char * data = octal_to_bytes(input, & len);
-
-    solver_result_t result = {
-        .len = 0,
-        .outputs = NULL,
-    };
-
-    if (!data) return result;
-    if (len == 0) {
-        free(data);
-        return result;
-    }
-
-    result.outputs = malloc(sizeof(solver_output_t));
-    result.len = 1;
-
-    result.outputs[0].data = sdsnewlen(data, len);
-    result.outputs[0].method = sdsnew("OCTAL");
-    result.outputs[0].fitness = score_combined(result.outputs[0].data, len);
-
-    free(data);
     return result;
 }
 
@@ -235,16 +234,14 @@ static solver_result_t solve_VIGENERE(sds input, keychain_t * keychain) {
             }
         }
 
-        float fitness = fitness_heuristic(output);
-        if (fitness > VIGENERE_THRESHOLD) {
-            result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
-            result.outputs[candidates].data = output;
-            result.outputs[candidates].method = sdscatprintf(sdsempty(), "VIGENERE(%s)", key);
-            result.outputs[candidates].fitness = fitness;
-            candidates++;
-        } else {
-            sdsfree(output);
-        }
+        float penalty = ((float) k) / keychain -> len;
+        float fitness = BASIC_DEFAULT_FITNESS - (penalty * PENALTY_FACTOR);
+
+        result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
+        result.outputs[candidates].data = output;
+        result.outputs[candidates].method = sdscatprintf(sdsempty(), "VIGENERE(%s)", key);
+        result.outputs[candidates].fitness = fitness;
+        candidates++;
     }
 
     result.len = candidates;
@@ -252,6 +249,68 @@ static solver_result_t solve_VIGENERE(sds input, keychain_t * keychain) {
 }
 
 
+
+
+solver_fn(RAILFENCE) {
+    solver_result_t result = {
+        .len = 0,
+        .outputs = NULL,
+    };
+
+    int candidates = 0;
+    int len = sdslen(input);
+    if (len < 2) return result;
+
+    int max_rails = len > 32 ? 32 : (len < 4 ? len : len/2 + 2);
+
+    for (int k = 2; k < max_rails; k++) {
+        int cycle_len = 2 * k - 2;
+        for (int o = 0; o < cycle_len; o++) {
+            // Rail Fence Decryption with Offset
+            // 1. Mark spots
+            char *matrix = calloc(k * len, sizeof(char));
+            if (!matrix) continue;
+
+            for (int i = 0; i < len; i++) {
+                int cycle_pos = (i + o) % cycle_len;
+                int row = cycle_pos < k ? cycle_pos : cycle_len - cycle_pos;
+                matrix[row * len + i] = '*'; // marker
+            }
+
+            // 2. Fill spots with ciphertext
+            int idx = 0;
+            for (int r = 0; r < k; r++) {
+                for (int c = 0; c < len; c++) {
+                    if (matrix[r * len + c] == '*' && idx < len) {
+                        matrix[r * len + c] = input[idx++];
+                    }
+                }
+            }
+
+            // 3. Read zigzag
+            sds plain = sdsnewlen(NULL, len);
+            for (int i = 0; i < len; i++) {
+                int cycle_pos = (i + o) % cycle_len;
+                int row = cycle_pos < k ? cycle_pos : cycle_len - cycle_pos;
+                plain[i] = matrix[row * len + i];
+            }
+
+            free(matrix);
+
+            float penalty = ((float) k) / max_rails;
+            float fitness = BASIC_DEFAULT_FITNESS - (penalty * PENALTY_FACTOR);
+
+            result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
+            result.outputs[candidates].data = plain;
+            result.outputs[candidates].method = sdscatprintf(sdsempty(), "RAILFENCE (k=%d, o=%d)", k, o);
+            result.outputs[candidates].fitness = fitness;
+            candidates++;
+        }
+    }
+
+    result.len = candidates;
+    return result;
+}
 
 solver_fn(BASE) {
     solver_result_t result = {
@@ -306,13 +365,16 @@ solver_fn(BASE) {
         if (overflow) {
             continue;
         }
+
+        float penalty = ((float) base) / 36.0f;
+        float fitness = BASIC_DEFAULT_FITNESS - (penalty * PENALTY_FACTOR);
         
         sds decimal_str = sdsfromlonglong(acc);
 
         result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
         result.outputs[candidates].data = decimal_str;
         result.outputs[candidates].method = sdscatprintf(sdsempty(), "BASE (base %d)", base);
-        result.outputs[candidates].fitness = 0.5f; // Neutral fitness
+        result.outputs[candidates].fitness = fitness;
         candidates++;
     }
 
@@ -328,8 +390,9 @@ solver_t solvers[] = {
     SOLVER(BINARY, 0.75, 0),
     SOLVER(OCTAL, 0.75, 0),
     SOLVER(AFFINE, 0.5, 1),
-    SOLVER(VIGENERE, 0.5, 1),
-    SOLVER(BASE, 0.5, 1),
+    SOLVER(VIGENERE, 0.5, 0),
+    SOLVER(BASE, 0.5, 0),
+    SOLVER(RAILFENCE, 0.5, 0),
 };
 
 size_t solvers_count = sizeof(solvers) / sizeof(solver_t);
