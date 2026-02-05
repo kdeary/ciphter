@@ -22,6 +22,35 @@
 #define BASIC_DEFAULT_FITNESS 0.75f
 #define PENALTY_FACTOR 0.01f
 
+typedef struct {
+    const char * morse;
+    char alpha;
+} morse_map_t;
+
+static morse_map_t morse_table[] = {
+    {".-", 'A'}, {"-...", 'B'}, {"-.-.", 'C'}, {"-..", 'D'}, {".", 'E'},
+    {"..-.", 'F'}, {"--.", 'G'}, {"....", 'H'}, {"..", 'I'}, {".---", 'J'},
+    {"-.-", 'K'}, {".-..", 'L'}, {"--", 'M'}, {"-.", 'N'}, {"---", 'O'},
+    {".--.", 'P'}, {"--.-", 'Q'}, {".-.", 'R'}, {"...", 'S'}, {"-", 'T'},
+    {"..-", 'U'}, {"...-", 'V'}, {".--", 'W'}, {"-..-", 'X'}, {"-.--", 'Y'},
+    {"--..", 'Z'}, {"-----", '0'}, {".----", '1'}, {"..---", '2'}, {"...--", '3'},
+    {"....-", '4'}, {".....", '5'}, {"-....", '6'}, {"--...", '7'}, {"---..", '8'},
+    {"----.", '9'}, {".-.-.-", '.'}, {"--..--", ','}, {"---...", ':'}, {"..--..", '?'},
+    {".----.", '\''}, {"-....-", '-'}, {"-..-.", '/'}, {"-.--.", '('}, {"-.--.-", ')'},
+    {".-..-.", '"'}, {".--.-.", '@'}, {"-...-", '='}, {"---...", ';'}
+};
+
+static size_t morse_table_size = sizeof(morse_table) / sizeof(morse_map_t);
+
+static char morse_decode_char(const char * morse) {
+    for (size_t i = 0; i < morse_table_size; i++) {
+        if (strcmp(morse, morse_table[i].morse) == 0) {
+            return morse_table[i].alpha;
+        }
+    }
+    return '?';
+}
+
 // hex string to bytes
 solver_fn(HEX) {
     int len = sdslen(input);
@@ -383,6 +412,79 @@ solver_fn(BASE) {
     return result;
 }
 
+solver_fn(MORSE) {
+    solver_result_t result = {
+        .len = 0,
+        .outputs = NULL,
+    };
+
+    // Word delimiters: /, \, \n, \r, ,, ;, :
+    const char * word_delims = "/\\\n\r,;:";
+    
+    sds work_copy = sdsdup(input);
+    for (size_t i = 0; i < sdslen(work_copy); i++) {
+        if (strchr(word_delims, work_copy[i])) {
+            work_copy[i] = '|'; // Use a canonical word separator
+        }
+    }
+
+    int word_count = 0;
+    sds * words = sdssplitlen(work_copy, sdslen(work_copy), "|", 1, & word_count);
+    sdsfree(work_copy);
+
+    if (word_count == 0) {
+        sdsfreesplitres(words, word_count);
+        return result;
+    }
+
+    sds plain = sdsempty();
+    int total_chars = 0;
+    int valid_chars = 0;
+
+    for (int i = 0; i < word_count; i++) {
+        int letter_count = 0;
+        sds * letters = sdssplitlen(words[i], sdslen(words[i]), " ", 1, & letter_count);
+        
+        for (int j = 0; j < letter_count; j++) {
+            sdstrim(letters[j], " \t\r\n");
+            if (sdslen(letters[j]) == 0) continue;
+            
+            char decoded = morse_decode_char(letters[j]);
+            if (decoded != '?') {
+                plain = sdscatlen(plain, & decoded, 1);
+                valid_chars++;
+            }
+            total_chars++;
+        }
+        sdsfreesplitres(letters, letter_count);
+        
+        if (i < word_count - 1 && sdslen(plain) > 0 && plain[sdslen(plain)-1] != ' ') {
+            plain = sdscat(plain, " ");
+        }
+    }
+    sdsfreesplitres(words, word_count);
+
+    if (total_chars == 0) {
+        sdsfree(plain);
+        return result;
+    }
+
+    float prob = (float) valid_chars / (float) total_chars;
+    if (prob < 0.5f) {
+        sdsfree(plain);
+        return result;
+    }
+
+    result.outputs = malloc(sizeof(solver_output_t));
+    result.outputs[0].data = plain;
+    result.outputs[0].method = sdsnew("MORSE");
+    result.outputs[0].fitness = prob * 0.9f;
+    result.len = 1;
+
+    return result;
+}
+
+
 
 
 solver_t solvers[] = {
@@ -394,6 +496,7 @@ solver_t solvers[] = {
     SOLVER(VIGENERE, 0.5, 0),
     SOLVER(BASE, 0.5, 0),
     SOLVER(RAILFENCE, 0.5, 0),
+    SOLVER(MORSE, 0.5, 0),
 };
 
 size_t solvers_count = sizeof(solvers) / sizeof(solver_t);
