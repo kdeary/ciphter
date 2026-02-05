@@ -1,22 +1,16 @@
 #include <argp.h>
-
+#include <time.h>
 #include <stdlib.h>
-
-#include <string.h>
-
-#include "../lib/sds/sds.h"
-
 #include <stdio.h>
-
-#include "analyzers/analysis_registry.h"
-
-#include "solvers/solver_registry.h"
-#include "utils.h"
-
-#include "english_detector.h"
-
+#include <string.h>
 #include <ctype.h>
 #include "../lib/minheap/heap.h"
+#include "../lib/sds/sds.h"
+
+#include "analyzers/analysis_registry.h"
+#include "solvers/solver_registry.h"
+#include "utils.h"
+#include "english_detector.h"
 
 #define PROBABILITY_THRESHOLD 0.01f
 
@@ -72,6 +66,9 @@ static struct argp_option options[] = {
     {
         "verbose", 'v', 0, 0, "Produce verbose output"
     },
+    {
+        "heap-size", 'H', "INT", 0, "Max heap size for solving"
+    },
     {0}
 };
 
@@ -90,6 +87,7 @@ struct arguments {
     int p_set;
     int silent;
     int timeout;
+    int max_heap_size;
 };
 
 // Parser function
@@ -187,6 +185,12 @@ static error_t parse_opt(int key, char * arg, struct argp_state * state) {
     case 'v':
         verbose_flag = 1;
         break;
+    case 'H':
+        arguments -> max_heap_size = atoi(arg);
+        if (arguments -> max_heap_size <= 0) {
+            argp_error(state, "Heap size must be a positive integer.");
+        }
+        break;
     case ARGP_KEY_ARG:
         argp_usage(state);
         break;
@@ -214,35 +218,61 @@ void analyze(sds input, float probability_threshold) {
     sdsfree(input);
 }
 
-#include <time.h>
-#include "utils.h"
-
-
-
 static void ui_log_result(FILE *f_out, int p_set, int depth, float fitness, float cumulative_fitness, 
                          const char *label, const char *data, const char *method, 
                          int english_threshold, float eng_score, int force_stdout) {
+    char truncated_data[65]; // 61 + "..." + null terminator
+    const char *display_data = data;
+    
+    if (strlen(data) > 61) {
+        strncpy(truncated_data, data, 58);
+        truncated_data[58] = '\0';
+        strcat(truncated_data, "...");
+        display_data = truncated_data;
+    }
+
     const char *fmt = "[%d][%.0f%%][Agg:%.2f]\t [%s] \"%s\" - Method: \"%s\"\n";
     
     if (f_out) {
-        fprintf(f_out, fmt, depth, fitness * 100, cumulative_fitness, label, data, method);
+        fprintf(f_out, fmt, depth, fitness * 100, cumulative_fitness, label, display_data, method);
         if (english_threshold >= 0.0f) {
             fprintf(f_out, "\t [ENG: %.2f%%]\n", eng_score * 100);
         }
     }
     
     if (force_stdout || p_set || english_threshold >= 0.0f) {
-        printf(fmt, depth, fitness * 100, cumulative_fitness, label, data, method);
+        printf(fmt, depth, fitness * 100, cumulative_fitness, label, display_data, method);
         if (english_threshold >= 0.0f) {
             printf("\t [ENG: %.2f%%]\n", eng_score * 100);
         }
     }
 }
 
+static int prune_compare_wrapper(const void * a, const void * b) {
+    const heap_entry * ea = a;
+    const heap_entry * eb = b;
+    return output_compare_fn(ea -> key, eb -> key);
+}
+
+void prune_heap(heap * h, int max_size) {
+    if (h -> active_entries <= max_size) return;
+
+    // Sort the entire table
+    // Since output_compare_fn returns -1 for "better", qsort will put better items at the start
+    qsort(h -> table, h -> active_entries, sizeof(heap_entry), prune_compare_wrapper);
+
+    // Free the entries we are pruning
+    for (int i = max_size; i < h -> active_entries; i++) {
+        free_heap_output(h -> table[i].key, h -> table[i].value);
+    }
+
+    h -> active_entries = max_size;
+}
+
 void solve(sds input, float fitness_threshold,
     const char * algorithms, int depth, keychain_t * keychain,
     const char * crib, float english_threshold,
-    const char * monitor_path, char * output_file, int p_set, int silent, int timeout) {
+    const char * monitor_path, char * output_file, int p_set, int silent, int timeout, int max_heap_size) {
     sds displayed_input = sdsdup(input);
     if (sdslen(displayed_input) > 61) {
         sdsrange(displayed_input, 0, 57);
@@ -301,6 +331,8 @@ void solve(sds input, float fitness_threshold,
         .depth = input_res.depth,
         .last_solver = input_res.last_solver
     };
+
+    printf("[INFO] Running solvers...\n");
 
     while (heap_size( & path_heap) > 0) {
         debug_log("Heap size: %zu\n", heap_size( & path_heap));
@@ -441,6 +473,10 @@ void solve(sds input, float fitness_threshold,
             free_output(current);
             free(current);
         }
+
+        if (max_heap_size > 0) {
+            prune_heap(&path_heap, max_heap_size);
+        }
     } // End of while loop
 
     heap_foreach(&path_heap, free_heap_output);
@@ -476,7 +512,8 @@ int main(int argc, char * argv[]) {
         .output_file = NULL,
         .p_set = 0,
         .silent = 0,
-        .timeout = 10
+        .timeout = 10,
+        .max_heap_size = 1000
     };
 
     struct argp argp = {
@@ -524,8 +561,9 @@ int main(int argc, char * argv[]) {
 
         debug_log("Probability Threshold: %f\n", args.probability_threshold / 100.0f);
         debug_log("English Threshold: %f\n", args.english_threshold / 100.0f);
+        debug_log("Max Heap Size: %d\n", args.max_heap_size);
 
-        solve(args.input, args.probability_threshold / 100.0f, args.algorithms, args.depth, & keychain, args.crib, args.english_threshold / 100.0f, args.monitor_path, args.output_file, args.p_set, args.silent, args.timeout);
+        solve(args.input, args.probability_threshold / 100.0f, args.algorithms, args.depth, & keychain, args.crib, args.english_threshold / 100.0f, args.monitor_path, args.output_file, args.p_set, args.silent, args.timeout, args.max_heap_size);
         args.input = NULL; // solve frees it
         sdsfreesplitres(tokens, count);
     }
