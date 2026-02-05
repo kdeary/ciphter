@@ -10,7 +10,7 @@ typedef struct {
 
 typedef struct {
 	float fitness;
-    float cumulative_fitness;
+	float cumulative_fitness;
 	int depth;
 	sds method;
 	sds data;
