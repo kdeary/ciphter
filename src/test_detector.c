@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include "english_detector.h"
+#include "fitness.h"
 
 void check(const char *name, const char *text, float expected_min, float expected_max) {
 	float score = score_english_combined(text, strlen(text));

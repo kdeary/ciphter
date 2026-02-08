@@ -82,17 +82,46 @@ Decrypts input by trying various combinations of algorithms.
 
 **Cracking a nested encoding:**
 ```bash
-./bin/ciphter -t S -i "01001000 01100101 01101100 01101100 01101111" -d 2
+$ bin/ciphter -tS -i "0101000100110001010100100100011101001100010101010101101001001101010100010101010101100011011101000100110101010100010010010111101001001110010000010011110100111101" -d 2
+[INFO] Running solving on input: "0101000100110001010100100100011101001100010101010101101001..." (Timeout: 10s)
+[INFO] Running solvers...
+
+--- Best Result (Agg:3.00) IS_ENGLISH_MODE=0 ---
+[2][100%]        "CTF-FLAG-1234"
+Method: "CIPHERTEXT -> BINARY -> BASE64"
+----------------------------------
+
+[INFO] Solving process finished.
 ```
 
 **Using a key for Vigenere decryption:**
 ```bash
-./bin/ciphter -t S -i "GIEWSC" -k "KEY"
+$ bin/ciphter -tS -i "NGQgNTggNDQgMmQgNTAgNTAgNTkgNTEgMmQgMzEgMzIgMzMgMzQ=" -d 3 -k "key" -c "CTF-"
+[INFO] Running solving on input: "NGQgNTggNDQgMmQgNTAgNTAgNTkgNTEgMmQgMzEgMzIgMzMgMzQ=" (Timeout: 10s)
+[INFO] Running solvers...
+[3][300%][Agg:4.52]      [CRIB FOUND] "CTF-FLAG-1234" - Method: "CIPHERTEXT -> BASE64 -> HEX -> VIGENERE(key)"
+
+--- Best Result (Agg:4.52) IS_ENGLISH_MODE=0 ---
+[3][300%]        "CTF-FLAG-1234"
+Method: "CIPHERTEXT -> BASE64 -> HEX -> VIGENERE(key)"
+----------------------------------
+
+[INFO] Solving process finished.
 ```
 
 **Filtering for a specific word (Crib):**
 ```bash
-./bin/ciphter -t S -i "LBH NER NJRFGZ" -c "AWESOME"
+$ bin/ciphter -tS -i "MDAwMTAxMDEwMTAwMDExMDAxMTExMDEwMTAwMDExMTAxMDAxMTAxMDEwMTExMTEwMTAxMDExMTEwMTAxMDEwMDAwMDEwMDAxMDEwMDAxMDEwMTAwMDAwMTAwMDEwMTAwMDEwMTAxMTAxMTExMDAwMTExMDEwMTAxMDAxMTExMTAxMDAxMDAxMTExMTExMDAxMTAwMDEwMTAxMDAxMDEwMA==" -d 8 -k "key" -c "CTF-"
+[INFO] Running solving on input: "MDAwMTAxMDEwMTAwMDExMDAxMTExMDEwMTAwMDExMTAxMDAxMTAxMDEwMT..." (Timeout: 10s)
+[INFO] Running solvers...
+[5][300%][Agg:3003.79]   [CRIB FOUND] "CTF-FLAG-1234" - Method: "CIPHERTEXT -> BASE64 -> RAILFENCE k=5 o=6 -> BINARY -> BASE64 -> XOR(key)" [INFO] Timeout reached (10s). Stopping...
+
+--- Best Result (Agg:3003.79) IS_ENGLISH_MODE=0 ---
+[5][300%]        "CTF-FLAG-1234"
+Method: "CIPHERTEXT -> BASE64 -> RAILFENCE k=5 o=6 -> BINARY -> BASE64 -> XOR(key)"
+----------------------------------
+
+[INFO] Solving process finished.
 ```
 
 ## License

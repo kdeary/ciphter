@@ -29,6 +29,7 @@ typedef struct {
 	float popularity;
 
 	int prevent_consecutive;
+	int handles_non_printable;
 	
 	solver_result_t (*fn)(sds input, keychain_t *keychain);
 } solver_t;

@@ -2,7 +2,7 @@
 #include <string.h>
 #include "analysis_registry.h"
 #include "../../lib/sds/sds.h"
-#include "../english_detector.h"
+#include "../fitness.h"
 
 #define analysis_fn(fn_label) static analysis_result_t check_ ## fn_label (sds input)
 #define ANALYZER(fn_label) { .label = #fn_label, .popularity = 0.5, .fn = check_ ## fn_label }

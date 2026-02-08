@@ -1,8 +1,10 @@
-#include "english_detector.h"
+#include "fitness.h"
 #include <ctype.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#include <math.h>
 
 // Top 100 English Bigrams
 // Source: http://practicalcryptography.com/cryptanalysis/letter-frequencies-various-languages/english-letter-frequencies/
@@ -178,32 +180,38 @@ static float score_letter_frequency(const char *text, size_t len) {
 	return 50.0f / (50.0f + chi_sq);
 }
 
-
-
-static float score_printable(const char *text, size_t len) {
-	if (len == 0) return 0.0f;
-	int printable = 0;
-	for (size_t i = 0; i < len; i++) {
-		unsigned char c = (unsigned char)text[i];
-		if (isprint(c) || c == '\n' || c == '\r' || c == '\t') {
-			printable++;
-		}
-	}
-	return (float)printable / len;
-}
-
 // Uses weights defined in utils.h
 float score_english_detailed(const char *text, size_t len) {
 	float s_bigram = score_english_bigram(text, len);
 	float s_casing = score_english_casing(text, len);
 	float s_freq = score_letter_frequency(text, len);
-	// float s_printable = score_printable(text, len); // Unused in weighting, but gathered
 
 	return (s_freq * WEIGHT_FREQ) + (s_bigram * WEIGHT_BIGRAM) + (s_casing * WEIGHT_CASING);
 }
 
-// New main fitness scoring for solvers - purely printable (with penalty for non-printable)
-float score_combined(const char *text, size_t len) {
+// Shannon Entropy Calculation
+float score_shannon_entropy(const char *text, size_t len) {
+    if (len == 0) return 0.0f;
+
+    int counts[256] = {0};
+    for (size_t i = 0; i < len; ++i) {
+        counts[(unsigned char)text[i]]++;
+    }
+
+    float entropy = 0.0f;
+    for (int i = 0; i < 256; ++i) {
+        if (counts[i] > 0) {
+            float p = (float)counts[i] / len;
+            entropy -= p * log2f(p);
+        }
+    }
+
+    // Normalize entropy (0-8) to 0.0-1.0 range (higher is better structure)
+    // 8.0 is max entropy (random bytes), 0.0 is min entropy (single repeated char)
+    return entropy;
+}
+
+float score_combined(const char *text, size_t len, int force_shannon) {
 	if (len == 0) return 0.0f;
 	
 	int non_printable = 0;
@@ -211,23 +219,18 @@ float score_combined(const char *text, size_t len) {
 		unsigned char c = (unsigned char)text[i];
 		// Check for printable (including standard whitespace)
 		if (!isprint(c) && c != '\n' && c != '\r' && c != '\t') {
-			non_printable++;
+			non_printable = 1;
+			break;
 		}
 	}
 
 	// Formula: (1/2)^N
-	if (non_printable == 0) {
-		// Bias towards English if we have a printable result
-		float eng = score_english_detailed(text, len);
-		return 1.0f + (eng * 0.1f);
+	if (!force_shannon && non_printable == 0) {
+		return 1.0f;
 	}
-	
-	// Optimization: If too many non-printables, it's effectively 0
-	if (non_printable > 10) return 0.0001f;
 
-	float score = 1.0f;
-	for (int i = 0; i < non_printable; i++) {
-		score *= 0.5f;
-	}
-	return score;
+	float ent = score_shannon_entropy(text, len);
+	float ent_score = (8.0f - ent) / 8.0f;
+	if (ent_score < 0) ent_score = 0;
+	return ent_score;
 }

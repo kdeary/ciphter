@@ -10,7 +10,7 @@
 #include "analyzers/analysis_registry.h"
 #include "solvers/solver_registry.h"
 #include "utils.h"
-#include "english_detector.h"
+#include "fitness.h"
 
 #define PROBABILITY_THRESHOLD 0.01f
 
@@ -352,16 +352,6 @@ void solve(sds input, float fitness_threshold,
             break;
         }
 
-        // Monitor logs
-        if (monitor_path && strstr(current -> method, monitor_path) != NULL) {
-            printf("[MONITOR] [%d]\t [Agg:%.2f] [Fit:%.2f] \"%s\" - Method: \"%s\"\n",
-                current -> depth,
-                current -> cumulative_fitness,
-                current -> fitness,
-                current -> data,
-                current -> method);
-        }
-
         float eng_score = 0.0f;
         if (english_threshold >= 0.0f) {
             eng_score = score_english_detailed(current -> data, sdslen(current -> data));
@@ -377,7 +367,7 @@ void solve(sds input, float fitness_threshold,
 
         if (crib && strstr(current -> data, crib) != NULL) {
             current -> fitness += 2.0f;
-            current -> cumulative_fitness += 9999.0f;
+            current -> cumulative_fitness += (999.0f * (depth - current -> depth));
         }
 
         // Track best result
@@ -426,8 +416,23 @@ void solve(sds input, float fitness_threshold,
             }
         }
 
+        // Check for non-printable characters
+        int is_dirty = 0;
+        size_t cur_len = sdslen(current->data);
+        for (size_t i = 0; i < cur_len; i++) {
+            unsigned char c = (unsigned char)current->data[i];
+            if (!isprint(c) && c != '\n' && c != '\r' && c != '\t') {
+                is_dirty = 1;
+                break;
+            }
+        }
+
         for (size_t i = 0; i < solvers_count; ++i) {
             solver_t solver = solvers[i];
+
+            if (is_dirty && !solver.handles_non_printable) {
+                continue;
+            }
 
             if (current -> last_solver && strcmp(current -> last_solver, solver.label) == 0 && solver.prevent_consecutive) {
                 continue;
@@ -457,17 +462,15 @@ void solve(sds input, float fitness_threshold,
                 saved_output -> depth = current -> depth + 1;
                 saved_output -> last_solver = solver.label;
 
-                // if(
-                //     strstr(saved_output -> method, "AFFINE") != NULL && strstr(saved_output -> method, "CIPHERTEXT -> BINARY -> MORSE -> RAILFENCE (k=3, o=0) -> HEX -> BASE64") != NULL) {
-                //     printf("[DEBUG] [%d]\t [Agg:%.2f] [Fit:%.2f] '%s' (%s) [%s]\n",
-                //         saved_output -> depth,
-                //         saved_output -> cumulative_fitness,
-                //         saved_output -> fitness,
-                //         saved_output -> data,
-                //         saved_output -> method,
-                //         saved_output -> last_solver
-                //     );
-                // }
+                // Monitor logs
+                if (monitor_path && strstr(sdscat(sdsnew(saved_output -> method), "$"), monitor_path) != NULL) {
+                    printf("[MONITOR] [%d]\t [Agg:%.2f] [Fit:%.2f] \"%s\" - Method: \"%s\"\n",
+                        saved_output -> depth,
+                        saved_output -> cumulative_fitness,
+                        saved_output -> fitness,
+                        saved_output -> data,
+                        saved_output -> method);
+                }
 
                 heap_insert( & path_heap, saved_output, saved_output);
             }
@@ -562,11 +565,15 @@ int main(int argc, char * argv[]) {
         debug_log("Algorithms: %s\n", args.algorithms);
         debug_log("Depth: %d\n", args.depth);
 
-        debug_log("Keys: ");
-        for (int i = 0; i < count; i++) {
-            printf("%s / ", tokens[i]);
+        if (count == 0) {
+            printf("[INFO] No keys provided.\n");
+        } else {
+            printf("[INFO] Keys: ");
+            for (int i = 0; i < count; i++) {
+                printf("%s / ", tokens[i]);
+            }
+            printf("\n");
         }
-        printf("\n");
 
         keychain_t keychain = {
             .len = count,

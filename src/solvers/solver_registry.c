@@ -8,10 +8,10 @@
 
 #include "../utils.h"
 
-#include "../english_detector.h"
+#include "../fitness.h"
 
 #define solver_fn(fn_label) static solver_result_t solve_ ## fn_label(sds input, keychain_t * keychain)
-#define SOLVER(fn_label, p_score, consecutive) { .label = #fn_label, .popularity = p_score, .prevent_consecutive = consecutive, .fn = solve_ ## fn_label }
+#define SOLVER(fn_label, p_score, consecutive, non_printable) { .label = #fn_label, .popularity = p_score, .prevent_consecutive = consecutive, .handles_non_printable = non_printable, .fn = solve_ ## fn_label }
 #define ALPHABET_SIZE 26
 
 // Solver Constants
@@ -53,6 +53,7 @@ static char morse_decode_char(const char * morse) {
 // hex string to bytes
 solver_fn(HEX) {
     int len = sdslen(input);
+    int in_len = len;
     unsigned char * data = hex_to_bytes(input, & len);
 
     solver_result_t result = {
@@ -62,20 +63,26 @@ solver_fn(HEX) {
 
     if (!data) return result;
 
+    if (len < in_len * (1.0f / 3.0f)) {
+        free(data);
+        return result;
+    }
+
     result.outputs = malloc(sizeof(solver_output_t));
     result.len = 1;
 
     result.outputs[0].data = sdsnewlen(data, len);
     result.outputs[0].method = sdsnew("HEX");
-    result.outputs[0].fitness = score_combined(result.outputs[0].data, len);
+    result.outputs[0].fitness = score_combined(result.outputs[0].data, len, 0);
 
     free(data);
     return result;
 }
 
 solver_fn(BASE64) {
+    int in_len = sdslen(input);
     size_t out_len;
-    unsigned char * decoded = base64_decode(input, sdslen(input), & out_len);
+    unsigned char * decoded = base64_decode(input, in_len, & out_len);
 
     solver_result_t result = {
         .len = 0,
@@ -85,7 +92,7 @@ solver_fn(BASE64) {
     if (!decoded) return result;
 
     // Ignore empty results
-    if (out_len == 0) {
+    if (out_len < in_len * 0.5) {
         free(decoded);
         return result;
     }
@@ -95,15 +102,16 @@ solver_fn(BASE64) {
 
     result.outputs[0].data = sdsnewlen(decoded, out_len);
     result.outputs[0].method = sdsnew("BASE64");
-    result.outputs[0].fitness = score_combined(result.outputs[0].data, out_len);
+    result.outputs[0].fitness = score_combined(result.outputs[0].data, out_len, 0);
 
     free(decoded);
     return result;
 }
 
 solver_fn(BINARY) {
-    int len = 0;
-    unsigned char * data = binary_to_bytes(input, & len);
+    int in_len = sdslen(input);
+    int out_len;
+    unsigned char * data = binary_to_bytes(input, & out_len);
 
     solver_result_t result = {
         .len = 0,
@@ -111,7 +119,7 @@ solver_fn(BINARY) {
     };
 
     if (!data) return result;
-    if (len == 0) {
+    if (out_len < in_len * (1.0f / 9.0f)) {
         free(data);
         return result;
     }
@@ -119,17 +127,18 @@ solver_fn(BINARY) {
     result.outputs = malloc(sizeof(solver_output_t));
     result.len = 1;
 
-    result.outputs[0].data = sdsnewlen(data, len);
+    result.outputs[0].data = sdsnewlen(data, out_len);
     result.outputs[0].method = sdsnew("BINARY");
-    result.outputs[0].fitness = score_combined(result.outputs[0].data, len);
+    result.outputs[0].fitness = score_combined(result.outputs[0].data, out_len, 0);
 
     free(data);
     return result;
 }
 
 solver_fn(OCTAL) {
-    int len = 0;
-    unsigned char * data = octal_to_bytes(input, & len);
+    int in_len = sdslen(input);
+    int out_len;
+    unsigned char * data = octal_to_bytes(input, & out_len);
 
     solver_result_t result = {
         .len = 0,
@@ -137,7 +146,7 @@ solver_fn(OCTAL) {
     };
 
     if (!data) return result;
-    if (len == 0) {
+    if (out_len < in_len * (1.0f / 4.0f)) {
         free(data);
         return result;
     }
@@ -145,9 +154,9 @@ solver_fn(OCTAL) {
     result.outputs = malloc(sizeof(solver_output_t));
     result.len = 1;
 
-    result.outputs[0].data = sdsnewlen(data, len);
+    result.outputs[0].data = sdsnewlen(data, out_len);
     result.outputs[0].method = sdsnew("OCTAL");
-    result.outputs[0].fitness = score_combined(result.outputs[0].data, len);
+    result.outputs[0].fitness = score_combined(result.outputs[0].data, out_len, 0);
 
     free(data);
     return result;
@@ -208,7 +217,7 @@ solver_fn(AFFINE) {
             free(plain);
 
             float penalty = ((float) a * ALPHABET_SIZE + (float) b) / (ALPHABET_SIZE * ALPHABET_SIZE);
-            float fitness = score_combined(decrypted, sdslen(decrypted)) - (penalty * PENALTY_FACTOR);
+            float fitness = score_combined(decrypted, sdslen(decrypted), 1) - (penalty * PENALTY_FACTOR);
 
             result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
             result.outputs[candidates].data = decrypted;
@@ -264,7 +273,7 @@ static solver_result_t solve_VIGENERE(sds input, keychain_t * keychain) {
         }
 
         float penalty = ((float) k) / keychain -> len;
-        float fitness = score_combined(output, sdslen(output)) - (penalty * PENALTY_FACTOR);
+        float fitness = score_combined(output, sdslen(output), 1) - (penalty * PENALTY_FACTOR);
 
         result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
         result.outputs[candidates].data = output;
@@ -276,9 +285,6 @@ static solver_result_t solve_VIGENERE(sds input, keychain_t * keychain) {
     result.len = candidates;
     return result;
 }
-
-
-
 
 solver_fn(RAILFENCE) {
     solver_result_t result = {
@@ -327,11 +333,11 @@ solver_fn(RAILFENCE) {
             free(matrix);
 
             float penalty =  ((float) k + (float) o) / (max_rails + cycle_len);
-            float fitness = score_combined(plain, sdslen(plain)) - (penalty * PENALTY_FACTOR);
+            float fitness = score_combined(plain, sdslen(plain), 1) - (penalty * PENALTY_FACTOR);
 
             result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
             result.outputs[candidates].data = plain;
-            result.outputs[candidates].method = sdscatprintf(sdsempty(), "RAILFENCE (k=%d, o=%d)", k, o);
+            result.outputs[candidates].method = sdscatprintf(sdsempty(), "RAILFENCE k=%d o=%d", k, o);
             result.outputs[candidates].fitness = fitness * SIMPLE_CIPHER_FITNESS_FACTOR;
             candidates++;
         }
@@ -398,7 +404,7 @@ solver_fn(BASE) {
         sds decimal_str = sdsfromlonglong(acc);
 
         float penalty = ((float) base) / 36.0f;
-        float fitness = score_combined(decimal_str, sdslen(decimal_str)) - (penalty * PENALTY_FACTOR);
+        float fitness = score_combined(decimal_str, sdslen(decimal_str), 0) - (penalty * PENALTY_FACTOR);
 
         result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
         result.outputs[candidates].data = decimal_str;
@@ -506,7 +512,7 @@ static solver_result_t solve_XOR(sds input, keychain_t * keychain) {
         }
 
         float penalty = ((float) k) / keychain -> len;
-        float fitness = score_combined(output, input_len) - (penalty * PENALTY_FACTOR);
+        float fitness = score_combined(output, input_len, 0) - (penalty * PENALTY_FACTOR);
 
         result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
         result.outputs[candidates].data = output;
@@ -520,16 +526,16 @@ static solver_result_t solve_XOR(sds input, keychain_t * keychain) {
 }
 
 solver_t solvers[] = {
-    SOLVER(HEX, 1, 0),
-    SOLVER(BASE64, 1, 0),
-    SOLVER(BINARY, 0.75, 0),
-    SOLVER(OCTAL, 0.75, 0),
-    SOLVER(AFFINE, 0.5, 1),
-    SOLVER(VIGENERE, 0.5, 0),
-    SOLVER(BASE, 0.5, 0),
-    SOLVER(RAILFENCE, 0.5, 1),
-    SOLVER(MORSE, 0.5, 0),
-    SOLVER(XOR, 0.5, 0),
+    SOLVER(HEX, 1, 0, 0),
+    SOLVER(BASE64, 1, 0, 0),
+    SOLVER(BINARY, 0.75, 0, 0),
+    SOLVER(OCTAL, 0.75, 0, 0),
+    SOLVER(XOR, 0.6, 1, 1),
+    SOLVER(MORSE, 0.5, 0, 0),
+    SOLVER(VIGENERE, 0.5, 0, 0),
+    SOLVER(AFFINE, 0.4, 1, 0),
+    SOLVER(RAILFENCE, 0.4, 1, 0),
+    SOLVER(BASE, 0.3, 0, 0),
 };
 
 size_t solvers_count = sizeof(solvers) / sizeof(solver_t);
