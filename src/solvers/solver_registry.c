@@ -326,7 +326,7 @@ solver_fn(RAILFENCE) {
 
             free(matrix);
 
-            float penalty = ((float) k) / max_rails;
+            float penalty =  ((float) k + (float) o) / (max_rails + cycle_len);
             float fitness = score_combined(plain, sdslen(plain)) - (penalty * PENALTY_FACTOR);
 
             result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
@@ -483,6 +483,42 @@ solver_fn(MORSE) {
     return result;
 }
 
+static solver_result_t solve_XOR(sds input, keychain_t * keychain) {
+    solver_result_t result = {
+        .len = 0,
+        .outputs = NULL,
+    };
+
+    if (keychain == NULL || keychain -> len == 0) return result;
+
+    int candidates = 0;
+    int input_len = sdslen(input);
+
+    for (int k = 0; k < keychain -> len; k++) {
+        sds key = keychain -> keys[k];
+        int key_len = sdslen(key);
+        if (key_len == 0) continue;
+
+        sds output = sdsnewlen(NULL, input_len);
+        
+        for (int i = 0; i < input_len; i++) {
+            output[i] = input[i] ^ key[i % key_len];
+        }
+
+        float penalty = ((float) k) / keychain -> len;
+        float fitness = score_combined(output, input_len) - (penalty * PENALTY_FACTOR);
+
+        result.outputs = realloc(result.outputs, sizeof(solver_output_t) * (candidates + 1));
+        result.outputs[candidates].data = output;
+        result.outputs[candidates].method = sdscatprintf(sdsempty(), "XOR(%s)", key);
+        result.outputs[candidates].fitness = fitness;
+        candidates++;
+    }
+
+    result.len = candidates;
+    return result;
+}
+
 solver_t solvers[] = {
     SOLVER(HEX, 1, 0),
     SOLVER(BASE64, 1, 0),
@@ -493,6 +529,7 @@ solver_t solvers[] = {
     SOLVER(BASE, 0.5, 0),
     SOLVER(RAILFENCE, 0.5, 1),
     SOLVER(MORSE, 0.5, 0),
+    SOLVER(XOR, 0.5, 0),
 };
 
 size_t solvers_count = sizeof(solvers) / sizeof(solver_t);

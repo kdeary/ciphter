@@ -564,9 +564,9 @@ int main(int argc, char * argv[]) {
 
         debug_log("Keys: ");
         for (int i = 0; i < count; i++) {
-            debug_log("%s / ", tokens[i]);
+            printf("%s / ", tokens[i]);
         }
-        debug_log("\n");
+        printf("\n");
 
         keychain_t keychain = {
             .len = count,

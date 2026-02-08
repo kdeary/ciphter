@@ -120,13 +120,13 @@ void run_csv_test(const char *filename) {
         sds keys_str = tokens[2];
         sds crib = tokens[3];
         sds expected_plaintext = tokens[4];
-        int depth = 1;
+        int depth = 8;
         if (count >= 6) depth = atoi(tokens[5]);
 
         printf("[RUN] %s (depth %d)... ", name, depth);
         fflush(stdout);
 
-        sds cmd = sdsnew("bin/ciphter.exe -t S -s -T 5 "); 
+        sds cmd = sdsnew("bin/ciphter.exe -t S -s -T 15 "); 
         cmd = sdscatprintf(cmd, "-d %d ", depth);
         cmd = sdscatprintf(cmd, "-i \"%s\" ", ciphertext);
         
